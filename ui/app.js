@@ -22,6 +22,7 @@ const cardEls = new Map();
 
 /* ------------------------------------------------------------------ démarrage */
 async function getApi() {
+  if (new URLSearchParams(location.search).has('demo')) { S.demo = true; return window.MockApi; }
   const t0 = Date.now();
   while (Date.now() - t0 < 20000) {
     const pw = window.pywebview;
@@ -49,6 +50,9 @@ async function boot() {
   syncFiles(init.files || []);
   window.__appReady = true;
   pollLoop();
+  const demo = new URLSearchParams(location.search).get('demo');
+  if (demo === 'preview') setTimeout(() => API.preview(2), 1500);
+  if (demo === 'run') setTimeout(() => API.start(), 1500);
 }
 
 /* ------------------------------------------------------------------ réglages */

@@ -524,8 +524,11 @@ def run(selftest_report: str | None = None) -> int:
     from webview.dom import DOMEventHandler
 
     api = Api()
+    url = ui_index()
+    if os.environ.get("UPSCALER_DEMO"):  # captures d'écran : données fictives
+        url += "?demo=" + os.environ["UPSCALER_DEMO"]
     window = webview.create_window(
-        f"Upscale Video AI {__version__}", url=ui_index(), js_api=api,
+        f"Upscale Video AI {__version__}", url=url, js_api=api,
         width=1400, height=880, min_size=(1100, 720), background_color="#0b0b14")
     api._window = window
     result = {"ok": False, "detail": ""}
