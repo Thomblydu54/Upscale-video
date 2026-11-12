@@ -71,8 +71,8 @@
       <section class="workspace glass" id="workspace">
         <div class="ws-head">
           <div>
-            <h2>Vos vidéos</h2>
-            <span class="muted" id="fileCount">Aucune vidéo pour le moment</span>
+            <h2>Vos fichiers</h2>
+            <span class="muted" id="fileCount">Aucun fichier pour le moment</span>
           </div>
           <div class="ws-actions">
             <button class="btn ghost sm" id="clearBtn" hidden>
@@ -81,7 +81,7 @@
             </button>
             <button class="btn soft sm" id="addBtn">
               <svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
-              Ajouter des vidéos
+              Ajouter vidéos / images
             </button>
           </div>
         </div>
@@ -98,12 +98,12 @@
               <svg viewBox="0 0 24 24"><path d="M5 19L19 5M10 5h9v9"/></svg>
             </div>
           </div>
-          <h3>Glissez vos vidéos ici</h3>
-          <p>ou <span class="link">cliquez pour parcourir</span> · MP4, MKV, MOV, AVI, WEBM, DVD…</p>
+          <h3>Glissez vos vidéos ou images ici</h3>
+          <p>ou <span class="link">cliquez pour parcourir</span> · MP4, MKV, MOV, AVI, DVD… · PNG, JPG, WebP</p>
           <div class="features">
             <span class="feat"><b>8K</b> jusqu'à 8K</span>
             <span class="feat"><b>IA</b> 5 modèles Real-ESRGAN</span>
-            <span class="feat"><b>♪</b> son & sous-titres conservés</span>
+            <span class="feat"><b>60</b> i/s fluides (interpolation)</span>
             <span class="feat"><b>⚡</b> accéléré par votre GPU</span>
           </div>
         </div>
@@ -135,7 +135,20 @@
           </div>
 
           <div class="section">
-            <div class="section-title"><span class="num">3</span> Qualité vidéo
+            <div class="section-title"><span class="num">3</span> Fluidité <span class="muted-t">· interpolation IA</span>
+              <span class="hint" id="fpsHint"></span>
+            </div>
+            <div class="seg interp" id="interpolation">
+              <button data-v="off">Non<small>d'origine</small></button>
+              <button data-v="x2">×2<small>ex. 60 i/s</small></button>
+              <button data-v="x3">×3<small>ex. 90 i/s</small></button>
+              <button data-v="x4">×4<small>ralenti</small></button>
+            </div>
+            <p class="help" id="interpHelp">L'IA (RIFE) invente les images intermédiaires : mouvements plus fluides. Les changements de plan sont détectés automatiquement. Vidéos uniquement.</p>
+          </div>
+
+          <div class="section">
+            <div class="section-title"><span class="num">4</span> Qualité vidéo
               <span class="hint accent" id="qualityLabel">Excellente</span>
             </div>
             <div class="range-wrap">
@@ -145,17 +158,21 @@
           </div>
 
           <div class="section">
-            <div class="section-title"><span class="num">4</span> Export</div>
-            <label class="field-label">Encodeur</label>
+            <div class="section-title"><span class="num">5</span> Export</div>
+            <label class="field-label">Encodeur vidéo</label>
             <div class="select-wrap"><select id="encoder"></select></div>
-            <label class="field-label">Format</label>
+            <label class="field-label">Format des vidéos</label>
             <div class="seg" id="container">
               <button data-v="mp4">MP4</button><button data-v="mkv">MKV</button>
+            </div>
+            <label class="field-label">Format des images</label>
+            <div class="seg" id="image_format">
+              <button data-v="auto" title="Même format que l'image d'origine">Identique</button><button data-v="png">PNG</button><button data-v="jpg">JPG</button><button data-v="webp">WebP</button>
             </div>
             <label class="field-label">Dossier de sortie</label>
             <div class="path-field" id="outdirField">
               <svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
-              <span id="outdir">À côté de la vidéo d'origine</span>
+              <span id="outdir">À côté du fichier d'origine</span>
               <button class="mini-x" id="outdirReset" title="Réinitialiser" hidden>×</button>
             </div>
           </div>
@@ -225,7 +242,7 @@
           <span id="pct">0%</span>
         </div>
         <div class="progress-text">
-          <div class="task-title" id="taskTitle">Prêt à agrandir vos vidéos</div>
+          <div class="task-title" id="taskTitle">Prêt à améliorer vos vidéos et images</div>
           <div class="stats" id="stats">
             <span class="stat"><small>Vitesse</small><b id="stSpeed">—</b></span>
             <span class="stat"><small>Écoulé</small><b id="stElapsed">—</b></span>

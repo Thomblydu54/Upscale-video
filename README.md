@@ -33,7 +33,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 
 ## Utilisation
 
-1. **Ajoutez vos vidéos** avec le bouton « Ajouter des vidéos » ou par glisser-déposer. Vous pouvez en ajouter plusieurs, elles seront traitées à la suite.
+1. **Ajoutez vos vidéos ou vos images** (PNG, JPG, WebP, BMP, TIFF…) avec le bouton « Ajouter » ou par glisser-déposer. Vous pouvez en ajouter plusieurs, elles seront traitées à la suite. Une **image donne une image** (`photo_upscaled_1600x1200.jpg`), une vidéo donne une vidéo.
 2. **Choisissez un modèle IA** :
    | Modèle | Pour quoi ? | Vitesse |
    |---|---|---|
@@ -42,7 +42,8 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    | Real-ESRGAN x4plus | vidéos réelles très bruitées | ⚡ |
    | Animation / Anime – Rapide | dessins animés, anime | ⚡⚡⚡⚡ |
    | Animation / Anime – Haute qualité | anime, rendu plus net | ⚡ |
-3. **Choisissez la résolution de sortie** : x2, x3, x4, 720p, 1080p, 1440p, 4K ou 8K.
+3. **Choisissez la résolution de sortie** : x2, x3, x4, 720p, 1080p, 1440p, 4K ou 8K. Vous pouvez aussi garder la *taille d'origine* pour n'utiliser que l'interpolation.
+   - **Fluidité (interpolation IA)** : ×2, ×3 ou ×4 images par seconde (par exemple 30 → 60 i/s), grâce à [RIFE](https://github.com/hzwer/ECCV2022-RIFE). Les changements de plan sont détectés, pour ne jamais fondre deux scènes l'une dans l'autre. Ce réglage ne concerne que les vidéos.
 4. Cliquez sur **Aperçu IA**, ou sur « Aperçu » sur une carte vidéo, puis **choisissez l'image** à tester :
    - glissez sur la pellicule, ou utilisez ← → (image par image) et Maj + ← → (±1 seconde) ;
    - saisissez un temps exact (ex. `1:23`), ou tirez une image au hasard ;
@@ -69,6 +70,7 @@ Au démarrage, l'application vérifie si une nouvelle version est disponible sur
 - **« Aucune carte graphique compatible Vulkan »** : mettez à jour les pilotes de votre carte graphique.
 - **Erreur de mémoire vidéo** : dans *Avancé*, mettez *Taille de tuile* sur 128 ou 64.
 - **Encodeur NVENC, AMF ou QSV en erreur** : revenez à « H.264 – CPU ».
+- **Interpolation trop lente ou erreur de mémoire** : choisissez ×2 plutôt que ×4. Interpoler double le nombre d'images à agrandir, ce qui double aussi le temps de traitement.
 - Le **Journal** en bas à gauche affiche le détail de chaque erreur.
 
 ## Comment ça marche
@@ -77,6 +79,7 @@ Au démarrage, l'application vérifie si une nouvelle version est disponible sur
 vidéo ──ffmpeg──▶ images PNG ──Real-ESRGAN (GPU/Vulkan)──▶ images x2/x4 ──ffmpeg──▶ vidéo + audio d'origine
 ```
 
+- **Interpolation** : [RIFE ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan), modèle RIFE v4.6.
 - **IA** : [Real-ESRGAN ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan), avec les modèles officiels Real-ESRGAN et les modèles [Upscayl](https://github.com/upscayl/upscayl) *lite* et *standard*.
 - **Vidéo** : [FFmpeg](https://ffmpeg.org) (builds [BtbN](https://github.com/BtbN/FFmpeg-Builds)).
 - **Interface** : HTML/CSS/JS affiché par [pywebview](https://pywebview.flowrl.com) (WebView2). L'interface de secours utilise Tkinter avec le thème Sun Valley. L'exe est empaqueté avec PyInstaller.
@@ -102,6 +105,7 @@ L'exe se trouve ensuite dans `dist/`.
 
 ## Crédits et licences
 - Real-ESRGAN : © Xintao Wang, licence BSD-3-Clause
+- RIFE / rife-ncnn-vulkan : © hzwer, nihui, licence MIT
 - Modèles Upscayl : © Upscayl, AGPL-3.0
 - FFmpeg : GPL
 - pywebview : BSD-3-Clause. Sun Valley ttk theme : MIT. tkinterdnd2 : MIT.

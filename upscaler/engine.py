@@ -1,12 +1,16 @@
-"""Moteur d'upscaling vidéo : FFmpeg (décodage/encodage) + Real-ESRGAN ncnn-vulkan (IA).
+"""Moteur d'upscaling vidéo : FFmpeg (décodage/encodage) + Real-ESRGAN ncnn-vulkan (IA)
++ RIFE ncnn-vulkan (interpolation d'images, optionnelle).
 
 Pipeline (streaming, espace disque borné) :
 
     ffmpeg (décodage -> PNG sur stdout)
         -> thread lecteur : écrit les images par lots dans un dossier temporaire
-        -> boucle IA      : realesrgan-ncnn-vulkan traite chaque lot sur le GPU
-        -> thread écrivain: envoie les images agrandies à ffmpeg (encodage) puis les supprime
+        -> boucle IA      : (RIFE crée les images intermédiaires) puis
+                            realesrgan-ncnn-vulkan agrandit chaque lot sur le GPU
+        -> thread écrivain: envoie les images à ffmpeg (encodage) puis les supprime
     ffmpeg (encodage H.264/H.265 + piste audio/sous-titres d'origine)
+
+Les fichiers image (PNG, JPEG, WebP…) sont traités à part et donnent une image.
 """
 from __future__ import annotations
 
@@ -63,7 +67,29 @@ OUTPUT_SIZES: list[tuple[str, str]] = [
     ("1440p", "1440p (2K)"),
     ("2160p", "2160p (4K UHD)"),
     ("4320p", "4320p (8K)"),
+    ("x1", "Taille d'origine (sans agrandissement)"),
 ]
+
+# Interpolation d'images (RIFE) : multiplie le nombre d'images par seconde
+INTERPOLATIONS: list[tuple[str, str]] = [
+    ("off", "Désactivée"),
+    ("x2", "x2 – deux fois plus fluide (ex. 30 → 60 i/s)"),
+    ("x3", "x3 (ex. 24 → 72 i/s)"),
+    ("x4", "x4 – ralenti fluide (ex. 30 → 120 i/s)"),
+]
+RIFE_BIN = "rife-ncnn-vulkan"
+RIFE_MODEL = "rife-v4.6"
+SCENE_THRESHOLD = 0.32  # au-delà : changement de plan (pas d'interpolation entre deux plans)
+
+# Formats de sortie pour les images
+IMAGE_FORMATS: list[tuple[str, str]] = [
+    ("auto", "Comme l'original"),
+    ("png", "PNG (sans perte)"),
+    ("jpg", "JPEG (léger)"),
+    ("webp", "WebP"),
+]
+IMAGE_EXT = (".png", ".jpg", ".jpeg", ".jfif", ".webp", ".bmp", ".tif", ".tiff", ".tga",
+             ".jp2", ".avif", ".heic", ".heif")
 
 
 @dataclass(frozen=True)
@@ -108,6 +134,8 @@ class Settings:
     output_dir: str = ""        # vide = même dossier que la source
     temp_dir: str = ""          # vide = dossier temporaire système
     auto_update: bool = True    # recherche de mises à jour au démarrage
+    interpolation: str = "off"  # off | x2 | x3 | x4 (RIFE)
+    image_format: str = "auto"  # auto | png | jpg | webp (sortie des images)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -127,7 +155,15 @@ class Settings:
             s.encoder = cls.encoder
         if s.output_size not in dict(OUTPUT_SIZES):
             s.output_size = cls.output_size
+        if s.interpolation not in dict(INTERPOLATIONS):
+            s.interpolation = cls.interpolation
+        if s.image_format not in dict(IMAGE_FORMATS):
+            s.image_format = cls.image_format
         return s
+
+    @property
+    def interp_factor(self) -> int:
+        return int(self.interpolation[1:]) if self.interpolation.startswith("x") else 1
 
 
 # --------------------------------------------------------------------------------------
@@ -151,8 +187,12 @@ class VideoInfo:
     codec: str
     audio: list = field(default_factory=list)      # [(index, codec)]
     subtitles: list = field(default_factory=list)  # [(index, codec)]
+    is_image: bool = False
+    has_alpha: bool = False
 
     def summary(self) -> str:
+        if self.is_image:
+            return f"image {self.width}x{self.height} ({self.codec})" + (", transparence" if self.has_alpha else "")
         return (f"{self.width}x{self.height} @ {self.fps_float:.3f} i/s, "
                 f"{fmt_time(self.duration)}, ~{self.frames} images, {self.codec}"
                 + (f", {len(self.audio)} piste(s) audio" if self.audio else ", sans audio"))
@@ -234,6 +274,17 @@ def probe(path: str) -> VideoInfo:
     if not sar or sar in ("1:1", "0:1", "N/A"):
         sar = None
 
+    fmt_name = str(data.get("format", {}).get("format_name", ""))
+    codec = video.get("codec_name", "") or ""
+    is_image = (fmt_name == "image2" or fmt_name.endswith("_pipe")
+                or (path.lower().endswith(IMAGE_EXT) and codec != "gif")) and frames <= 1
+    if is_image:
+        rotation = 0
+        duration, frames, rate = 0.0, 1, Fraction(25, 1)
+    pix_fmt = video.get("pix_fmt", "") or ""
+    has_alpha = is_image and (pix_fmt.startswith(("rgba", "bgra", "argb", "abgr", "ya", "yuva", "gbrap"))
+                              or pix_fmt in ("pal8", "rgb32", "bgr32") or "a64" in pix_fmt)
+
     audio, subs = [], []
     for s in streams:
         if s.get("codec_type") == "audio":
@@ -241,13 +292,15 @@ def probe(path: str) -> VideoInfo:
         elif s.get("codec_type") == "subtitle":
             subs.append((int(s["index"]), s.get("codec_name", "")))
 
+    if is_image:
+        audio, subs = [], []
     return VideoInfo(path=path, width=width, height=height,
                      fps=f"{rate.numerator}/{rate.denominator}", fps_float=float(rate),
                      duration=duration, frames=frames, sar=sar,
                      field_order=video.get("field_order", "unknown") or "unknown",
                      color_space=video.get("color_space", "") or "",
-                     pix_fmt=video.get("pix_fmt", "") or "",
-                     codec=video.get("codec_name", "?"), audio=audio, subtitles=subs)
+                     pix_fmt=pix_fmt, codec=codec or "?", audio=audio, subtitles=subs,
+                     is_image=is_image, has_alpha=has_alpha)
 
 
 # --------------------------------------------------------------------------------------
@@ -266,6 +319,9 @@ class Plan:
     encode_filter: str
     batch_size: int
     notes: list = field(default_factory=list)
+    upscale: bool = True        # False : taille d'origine (interpolation seule)
+    interp: int = 1             # multiplicateur d'images par seconde (RIFE)
+    out_fps: str = ""           # fréquence de sortie (fraction)
 
 
 def _even(x: float) -> int:
@@ -282,10 +338,24 @@ def target_factor(info: VideoInfo, output_size: str) -> float:
 
 
 def make_plan(info: VideoInfo, settings: Settings) -> Plan:
+    if info.is_image:
+        return make_image_plan(info, settings)
     model = MODELS_BY_KEY.get(settings.model, MODELS[0])
     factor = target_factor(info, settings.output_size)
+    interp = settings.interp_factor
     notes = []
+    if settings.output_size == "x1":
+        if interp <= 1:
+            raise UpscaleError(
+                "« Taille d'origine » ne fait rien sans interpolation : choisissez une taille de "
+                "sortie plus grande, ou activez l'interpolation d'images.")
+        return _make_interp_only_plan(info, settings, interp)
     if factor <= 1.0:
+        if interp > 1:  # vidéo déjà assez grande : on garde l'interpolation seule
+            plan = _make_interp_only_plan(info, settings, interp)
+            plan.notes.append(f"La vidéo fait déjà {info.width}x{info.height} : pas d'agrandissement, "
+                              "interpolation seulement.")
+            return plan
         raise UpscaleError(
             f"La vidéo fait déjà {info.width}x{info.height} : la résolution choisie "
             f"({settings.output_size}) n'est pas plus grande.")
@@ -297,19 +367,7 @@ def make_plan(info: VideoInfo, settings: Settings) -> Plan:
     ai_w, ai_h = info.width * ai_scale, info.height * ai_scale
     out_w, out_h = _even(info.width * factor), _even(info.height * factor)
 
-    # --- filtres de décodage (vers RGB pour l'IA)
-    dec = []
-    if settings.deinterlace == "on":
-        dec.append("bwdif=mode=send_frame:parity=auto:deint=all")
-    elif settings.deinterlace == "auto":
-        dec.append("bwdif=mode=send_frame:parity=auto:deint=interlaced")
-    known = {"bt709": "bt709", "bt470bg": "bt601", "smpte170m": "bt601",
-             "smpte240m": "smpte240m", "fcc": "fcc", "bt2020nc": "bt2020", "bt2020c": "bt2020"}
-    matrix = known.get(info.color_space)
-    if matrix is None:  # non renseigné : on devine comme les lecteurs vidéo
-        matrix = "bt709" if min(info.width, info.height) >= 720 or info.width >= 1280 else "bt601"
-    dec.append(f"scale=in_color_matrix={matrix}:in_range=auto")
-    dec.append("format=rgb24")
+    dec = [_decode_filter(info, settings)]
 
     # --- filtres d'encodage (RGB -> YUV BT.709, redimensionnement final)
     enc = [f"scale={out_w}:{out_h}:flags=lanczos:out_color_matrix=bt709:out_range=tv",
@@ -324,14 +382,97 @@ def make_plan(info: VideoInfo, settings: Settings) -> Plan:
 
     if info.color_space.startswith("bt2020"):
         notes.append("Vidéo HDR / BT.2020 détectée : la sortie sera en SDR BT.709.")
-    return Plan(ai_scale, ai_w, ai_h, out_w, out_h, ",".join(dec), ",".join(enc), batch, notes)
+    if interp > 1:
+        batch = max(16, batch // interp)
+    return Plan(ai_scale, ai_w, ai_h, out_w, out_h, ",".join(dec), ",".join(enc), batch, notes,
+                upscale=True, interp=interp, out_fps=_mul_fps(info.fps, interp))
+
+
+def _mul_fps(fps: str, k: int) -> str:
+    fr = Fraction(fps) * k
+    return f"{fr.numerator}/{fr.denominator}"
+
+
+def _decode_filter(info: VideoInfo, settings: Settings) -> str:
+    dec = []
+    if settings.deinterlace == "on":
+        dec.append("bwdif=mode=send_frame:parity=auto:deint=all")
+    elif settings.deinterlace == "auto":
+        dec.append("bwdif=mode=send_frame:parity=auto:deint=interlaced")
+    known = {"bt709": "bt709", "bt470bg": "bt601", "smpte170m": "bt601",
+             "smpte240m": "smpte240m", "fcc": "fcc", "bt2020nc": "bt2020", "bt2020c": "bt2020"}
+    matrix = known.get(info.color_space)
+    if matrix is None:
+        matrix = "bt709" if min(info.width, info.height) >= 720 or info.width >= 1280 else "bt601"
+    dec.append(f"scale=in_color_matrix={matrix}:in_range=auto")
+    dec.append("format=rgb24")
+    return ",".join(dec)
+
+
+def _make_interp_only_plan(info: VideoInfo, settings: Settings, interp: int) -> Plan:
+    w, h = _even(info.width), _even(info.height)
+    enc = [f"scale={w}:{h}:flags=lanczos:out_color_matrix=bt709:out_range=tv", "format=yuv420p"]
+    if info.sar:
+        enc.append("setsar=" + info.sar.replace(":", "/"))
+    batch = int(1.5e9 / max(info.width * info.height * 3 * 0.6 * interp, 1))
+    batch = max(16, min(300, batch))
+    notes = []
+    if info.color_space.startswith("bt2020"):
+        notes.append("Vidéo HDR / BT.2020 détectée : la sortie sera en SDR BT.709.")
+    return Plan(1, info.width, info.height, w, h, _decode_filter(info, settings), ",".join(enc),
+                batch, notes, upscale=False, interp=interp, out_fps=_mul_fps(info.fps, interp))
+
+
+def make_image_plan(info: VideoInfo, settings: Settings) -> Plan:
+    model = MODELS_BY_KEY.get(settings.model, MODELS[0])
+    if settings.output_size == "x1":
+        raise UpscaleError("« Taille d'origine » : rien à faire pour une image. "
+                           "Choisissez x2, x4 ou une résolution (4K…).")
+    factor = target_factor(info, settings.output_size)
+    if factor <= 1.0:
+        raise UpscaleError(
+            f"L'image fait déjà {info.width}x{info.height} : la résolution choisie "
+            f"({settings.output_size}) n'est pas plus grande.")
+    candidates = sorted(model.scales)
+    ai_scale = next((s for s in candidates if s >= factor - 1e-6), candidates[-1])
+    notes = []
+    if factor > ai_scale + 1e-6:
+        notes.append(f"Facteur x{factor:.2f} > x{ai_scale} de l'IA : complété par un "
+                     f"agrandissement classique (Lanczos).")
+    out_w = max(1, int(round(info.width * factor)))
+    out_h = max(1, int(round(info.height * factor)))
+    fmt = "rgba" if info.has_alpha else "rgb24"
+    return Plan(ai_scale, info.width * ai_scale, info.height * ai_scale, out_w, out_h,
+                f"format={fmt}", "", 1, notes, upscale=True, interp=1, out_fps="")
+
+
+def image_output_ext(info: VideoInfo, settings: Settings) -> str:
+    fmt = settings.image_format
+    if fmt == "auto":
+        src = os.path.splitext(info.path)[1].lower()
+        if src in (".jpg", ".jpeg", ".jfif"):
+            return "jpg"
+        if src == ".webp":
+            return "webp"
+        return "png"
+    return fmt if fmt in ("png", "jpg", "webp") else "png"
 
 
 def default_output_path(info: VideoInfo, settings: Settings, plan: Plan) -> str:
     folder = settings.output_dir or os.path.dirname(os.path.abspath(info.path))
     stem = os.path.splitext(os.path.basename(info.path))[0]
-    ext = settings.container if settings.container in ("mp4", "mkv") else "mp4"
-    base = os.path.join(folder, f"{stem}_upscaled_{plan.out_w}x{plan.out_h}")
+    if info.is_image:
+        ext = image_output_ext(info, settings)
+        tag = f"upscaled_{plan.out_w}x{plan.out_h}"
+    else:
+        ext = settings.container if settings.container in ("mp4", "mkv") else "mp4"
+        parts = []
+        if plan.upscale:
+            parts.append(f"upscaled_{plan.out_w}x{plan.out_h}")
+        if plan.interp > 1:
+            parts.append(f"{float(Fraction(plan.out_fps)):.4g}fps")
+        tag = "_".join(parts) or "upscaled"
+    base = os.path.join(folder, f"{stem}_{tag}")
     path, n = f"{base}.{ext}", 1
     while os.path.exists(path):
         path = f"{base} ({n}).{ext}"
@@ -373,7 +514,7 @@ def build_decoder_cmd(info: VideoInfo, plan: Plan) -> list:
 
 def build_encoder_cmd(info: VideoInfo, plan: Plan, settings: Settings, output: str) -> list:
     cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-           "-f", "image2pipe", "-framerate", info.fps, "-c:v", "png", "-i", "-",
+           "-f", "image2pipe", "-framerate", plan.out_fps or info.fps, "-c:v", "png", "-i", "-",
            "-i", info.path,
            "-map", "0:v:0", "-vf", plan.encode_filter]
     cmd += encoder_args(settings)
@@ -419,6 +560,50 @@ def build_ai_cmd(settings: Settings, plan: Plan, src: str, dst: str) -> list:
     if settings.tta:
         cmd += ["-x"]
     return cmd
+
+
+def rife_model_dir() -> str:
+    return os.path.join(tools.bin_dir(), RIFE_MODEL)
+
+
+def build_rife_cmd(settings: Settings, plan: Plan, info: VideoInfo, src: str, dst: str,
+                   numframe: int) -> list:
+    cmd = [tools.find_tool(RIFE_BIN), "-i", src, "-o", dst, "-n", str(numframe),
+           "-m", rife_model_dir(), "-f", "%08d.png"]
+    if str(settings.gpu).strip().lower() not in ("", "auto"):
+        cmd += ["-g", str(settings.gpu)]
+    if max(info.width, info.height) >= 2560:
+        cmd += ["-u"]  # mode UHD : mouvements amples sur les très grandes images
+    return cmd
+
+
+def detect_scene_cuts(info: VideoInfo, plan: Plan, on_frame: Optional[Callable[[int], None]] = None,
+                      register: Optional[Callable] = None) -> set:
+    """Indices (0 = première image) des images qui commencent un nouveau plan."""
+    deint = plan.decode_filter.split(",")[0] if plan.decode_filter.startswith("bwdif") else ""
+    chain = ",".join(x for x in (deint, f"fps={info.fps}", "setpts=N", "scale=256:-2",
+                                 f"select='gt(scene,{SCENE_THRESHOLD})'", "metadata=print") if x)
+    cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info",
+           "-i", info.path, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", chain,
+           "-f", "null", "-", "-progress", "pipe:1"]
+    log = tempfile.TemporaryFile()
+    proc = tools.popen(cmd, stdout=subprocess.PIPE, stderr=log, stdin=subprocess.DEVNULL)
+    if register:
+        register(proc)
+    for line in proc.stdout:
+        if line.startswith(b"frame=") and on_frame:
+            try:
+                on_frame(int(line[6:].strip() or 0))
+            except ValueError:
+                pass
+    proc.wait()
+    log.seek(0)
+    text = log.read().decode("utf-8", "replace")
+    log.close()
+    import re
+    cuts = {int(m.group(1)) for m in re.finditer(r"\bframe:\d+\s+pts:(\d+)", text)}
+    cuts.discard(0)
+    return cuts
 
 
 # --------------------------------------------------------------------------------------
@@ -469,10 +654,15 @@ def fmt_time_ms(seconds: float) -> str:
     return f"{fmt_time(whole)}.{cs:02d}"
 
 
+def _seek(t: float) -> list:
+    """Option de recherche ffmpeg (aucune à 0 : « -ss 0 » ne produit rien sur une image fixe)."""
+    return ["-ss", f"{t:.4f}"] if t and t > 0 else []
+
+
 def grab_frame_jpeg(path: str, t: float, width: int = 1280, quality: int = 3) -> bytes:
     """Extrait l'image affichée au temps `t` (recherche précise) en JPEG."""
     proc = tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
-                      "-ss", f"{max(0.0, t):.4f}", "-i", path, "-frames:v", "1", "-an", "-sn",
+                      *_seek(t), "-i", path, "-frames:v", "1", "-an", "-sn",
                       "-vf", f"scale='min({width},iw)':-2:flags=bicubic", "-q:v", str(quality),
                       "-f", "image2pipe", "-c:v", "mjpeg", "-"],
                      stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
@@ -577,6 +767,8 @@ class Upscaler:
         self._stop.clear()
         self._user_cancel = False
         self._errors = []
+        self._interp = 1
+        self._tail_dups = 0
         with self._lock:
             self._procs = []
 
@@ -604,6 +796,11 @@ class Upscaler:
         self._reset()
         info = probe(path)
         plan = make_plan(info, settings)
+        if not plan.upscale:
+            raise UpscaleError("L'aperçu montre l'agrandissement par l'IA. Choisissez une taille de "
+                               "sortie plus grande que l'original (x2, 4K…) pour le voir.")
+        if info.is_image:
+            time_s = 0.0
         folder = os.path.join(tempfile.gettempdir(), "UpscaleVideoAI_apercus")
         os.makedirs(folder, exist_ok=True)
         stem = os.path.splitext(os.path.basename(path))[0][:60]
@@ -618,7 +815,7 @@ class Upscaler:
 
         self.on_log(f"Aperçu : extraction de l'image à {fmt_time_ms(t)}…")
         proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
-                          "-ss", f"{t:.3f}", "-i", path, "-frames:v", "1",
+                          *_seek(t), "-i", path, "-frames:v", "1",
                           "-vf", plan.decode_filter, src],
                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         if proc.returncode != 0 or not os.path.isfile(src):
@@ -674,10 +871,18 @@ class Upscaler:
         os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
 
         self.on_log(f"Source : {info.summary()}")
-        self.on_log(f"Sortie : {plan.out_w}x{plan.out_h} (IA x{plan.ai_scale} → "
-                    f"{plan.ai_w}x{plan.ai_h}) – modèle {settings.model}")
+        if plan.upscale:
+            self.on_log(f"Sortie : {plan.out_w}x{plan.out_h} (IA x{plan.ai_scale} → "
+                        f"{plan.ai_w}x{plan.ai_h}) – modèle {settings.model}")
+        else:
+            self.on_log(f"Sortie : {plan.out_w}x{plan.out_h} (taille d'origine)")
+        if plan.interp > 1:
+            self.on_log(f"Interpolation RIFE x{plan.interp} : {info.fps_float:.3f} → "
+                        f"{float(Fraction(plan.out_fps)):.3f} images/s")
         for n in plan.notes:
             self.on_log("Note : " + n)
+        if info.is_image:
+            return self._process_image(info, plan, settings, output)
 
         work = tempfile.mkdtemp(prefix="upv_", dir=settings.temp_dir or None)
         try:
@@ -698,13 +903,81 @@ class Upscaler:
             shutil.rmtree(work, ignore_errors=True)
         return output
 
+    # ---- images -------------------------------------------------------------------
+    def _process_image(self, info: VideoInfo, plan: Plan, settings: Settings, output: str) -> str:
+        self._total, self._samples, self._last_report = 1, collections.deque(), 0.0
+        self._t_start = time.monotonic()
+        self._report(0, "IA", force=True)
+        ffmpeg = tools.find_tool("ffmpeg")
+        work = tempfile.mkdtemp(prefix="upv_img_", dir=settings.temp_dir or None)
+        try:
+            src = os.path.join(work, "source.png")
+            ai = os.path.join(work, "ia.png")
+            proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                              "-i", info.path, "-frames:v", "1", "-vf", plan.decode_filter, src],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if proc.returncode != 0 or not os.path.isfile(src):
+                raise UpscaleError("Lecture de l'image impossible :\n"
+                                   + proc.stderr.decode("utf-8", "replace")[-800:])
+            log = os.path.join(work, "realesrgan.log")
+            self.on_log("Passage dans l'IA…")
+            with open(log, "wb") as lf:
+                p = self._register(tools.popen(build_ai_cmd(settings, plan, src, ai), stdout=lf,
+                                               stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL))
+                p.wait()
+            if self._user_cancel:
+                raise Cancelled()
+            if not os.path.isfile(ai):
+                raise UpscaleError(self._ai_error_message(log))
+            self._report(1, "Enregistrement", force=True)
+            ext = os.path.splitext(output)[1].lower().lstrip(".")
+            vf = f"scale={plan.out_w}:{plan.out_h}:flags=lanczos"
+            if ext == "jpg":
+                codec = ["-vf", vf + ",format=yuvj444p", "-c:v", "mjpeg", "-q:v", "2"]
+            elif ext == "webp":
+                codec = ["-vf", vf, "-c:v", "libwebp", "-quality", "95", "-compression_level", "4"]
+            else:
+                codec = ["-vf", vf + (",format=rgba" if info.has_alpha else ",format=rgb24"),
+                         "-c:v", "png"]
+            tmp_out = os.path.join(work, "sortie." + ext)
+            proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                              "-i", ai, "-frames:v", "1", *codec, "-update", "1", tmp_out],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if proc.returncode != 0 or not os.path.isfile(tmp_out):
+                raise UpscaleError("Enregistrement de l'image impossible :\n"
+                                   + proc.stderr.decode("utf-8", "replace")[-800:])
+            shutil.move(tmp_out, output)
+            self._report(1, "Terminé", force=True)
+            return output
+        finally:
+            shutil.rmtree(work, ignore_errors=True)
+
+    # ---- vidéos -------------------------------------------------------------------
     def _pipeline(self, info: VideoInfo, plan: Plan, settings: Settings,
                   output: str, work: str) -> None:
-        self._total = max(1, info.frames)
-        self._done_ai = 0
         self._samples = collections.deque()
         self._t_start = time.monotonic()
         self._last_report = 0.0
+        self._cuts: set = set()
+        self._prev_last: Optional[str] = None   # dernière image source du lot précédent
+        self._src_seen = 0                      # images source déjà interpolées
+        self._tail_dups = max(0, plan.interp - 1)
+        if plan.interp > 1:
+            tools.find_tool(RIFE_BIN)  # erreur claire si absent
+            if not os.path.isdir(rife_model_dir()):
+                raise UpscaleError(f"Modèle d'interpolation introuvable : {rife_model_dir()}")
+            self._total = max(1, info.frames)
+            self.on_log("Détection des changements de plan (pour ne pas mélanger deux scènes)…")
+            self._cuts = detect_scene_cuts(info, plan,
+                                           on_frame=lambda n: self._report(n, "Analyse des plans"),
+                                           register=self._register)
+            if self._user_cancel:
+                raise Cancelled()
+            self.on_log(f"{len(self._cuts)} changement(s) de plan détecté(s).")
+            self._samples = collections.deque()
+            self._t_start = time.monotonic()
+        self._total = max(1, info.frames * plan.interp)
+        self._done_ai = 0
 
         dec_log = os.path.join(work, "decoder.log")
         enc_log = os.path.join(work, "encoder.log")
@@ -721,6 +994,7 @@ class Upscaler:
             ai_q: queue.Queue = queue.Queue(maxsize=1)
             enc_q: queue.Queue = queue.Queue(maxsize=1)
             self._encoded = 0
+            self._interp = plan.interp
 
             reader = threading.Thread(target=self._reader_thread,
                                       args=(dec.stdout, work, plan.batch_size, ai_q), daemon=True)
@@ -728,9 +1002,9 @@ class Upscaler:
                                       args=(enc.stdin, enc_q), daemon=True)
             reader.start()
             writer.start()
-            self._report(0, "IA", force=True)
+            self._report(0, "IA" if plan.upscale else "Interpolation", force=True)
             try:
-                self._ai_loop(settings, plan, ai_q, enc_q, ai_log)
+                self._ai_loop(settings, plan, info, ai_q, enc_q, ai_log)
             except _Stopped:
                 pass
             except BaseException as e:  # noqa: BLE001
@@ -782,7 +1056,7 @@ class Upscaler:
                     batch, count, folder = batch + 1, 0, None
             if folder is not None and count:
                 self._put(ai_q, (folder, count))
-            self._total = max(index, 1)
+            self._total = max(index * self._interp, 1)
             self._put(ai_q, None)
         except _Stopped:
             pass
@@ -790,7 +1064,7 @@ class Upscaler:
             if not self._stop.is_set():
                 self._fail(e)
 
-    def _ai_loop(self, settings: Settings, plan: Plan, ai_q: queue.Queue,
+    def _ai_loop(self, settings: Settings, plan: Plan, info: VideoInfo, ai_q: queue.Queue,
                  enc_q: queue.Queue, log_path: str) -> None:
         while True:
             item = self._get(ai_q)
@@ -798,6 +1072,13 @@ class Upscaler:
                 self._put(enc_q, None)
                 return
             in_dir, count = item
+            if plan.interp > 1:
+                in_dir, count = self._interpolate(settings, plan, info, in_dir, count, log_path)
+            if not plan.upscale:
+                self._done_ai += count
+                self._report(self._done_ai, "Interpolation", force=True)
+                self._put(enc_q, (in_dir, count))
+                continue
             out_dir = in_dir[:-3] + "_out"
             os.makedirs(out_dir, exist_ok=True)
             base = self._done_ai
@@ -824,8 +1105,74 @@ class Upscaler:
             shutil.rmtree(in_dir, ignore_errors=True)
             self._put(enc_q, (out_dir, count))
 
+    def _interpolate(self, settings: Settings, plan: Plan, info: VideoInfo, in_dir: str,
+                     count: int, log_path: str) -> tuple[str, int]:
+        """Crée les images intermédiaires d'un lot avec RIFE.
+
+        Le lot est précédé de la dernière image du lot précédent, pour interpoler aussi la
+        transition entre deux lots. Les images d'origine sont recopiées telles quelles et, aux
+        changements de plan, l'image intermédiaire est remplacée par l'image précédente."""
+        k = plan.interp
+        names = sorted(n for n in os.listdir(in_dir) if n.endswith(".png"))
+        first_global = self._src_seen               # indice global de names[0]
+        inputs = [os.path.join(in_dir, n) for n in names]
+        has_prev = self._prev_last is not None
+        if has_prev:
+            prev_copy = os.path.join(in_dir, "00000000_prev.png")
+            shutil.move(self._prev_last, prev_copy)
+            inputs.insert(0, prev_copy)
+        n_in = len(inputs)
+        g0 = first_global - (1 if has_prev else 0)   # indice global de inputs[0]
+        out_dir = in_dir[:-3] + "_rin"
+        os.makedirs(out_dir, exist_ok=True)
+        keep = range(1, k * (n_in - 1) + 1) if has_prev else range(0, k * (n_in - 1) + 1)
+
+        rife_out = in_dir[:-3] + "_rife"
+        if n_in >= 2:
+            os.makedirs(rife_out, exist_ok=True)
+            self._report(self._done_ai, "Interpolation", force=True)
+            with open(log_path, "wb") as lf:
+                proc = self._register(tools.popen(
+                    build_rife_cmd(settings, plan, info, in_dir, rife_out, k * n_in),
+                    stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL))
+                while proc.poll() is None:
+                    if self._stop.is_set():
+                        proc.kill()
+                        proc.wait()
+                        raise _Stopped()
+                    time.sleep(0.3)
+            with self._lock:
+                self._procs.remove(proc)
+            if self._stop.is_set():
+                raise _Stopped()
+            if proc.returncode != 0 or _count_png(rife_out) < k * n_in - (k - 1):
+                tail = _tail(log_path)
+                raise UpscaleError("L'interpolation d'images (RIFE) a échoué."
+                                   + ("\n\nMémoire vidéo insuffisante." if "memory" in tail.lower() else "")
+                                   + f"\n\nJournal :\n{tail[-1000:]}")
+
+        out_index = 0
+        for i in keep:
+            sx, rem = divmod(i, k)
+            dst = os.path.join(out_dir, f"{out_index:08d}.png")
+            out_index += 1
+            if rem == 0:                       # image d'origine : copie exacte
+                shutil.copyfile(inputs[sx], dst)
+            elif (g0 + sx + 1) in self._cuts:  # changement de plan : pas de fondu
+                shutil.copyfile(inputs[sx], dst)
+            else:
+                os.replace(os.path.join(rife_out, f"{i + 1:08d}.png"), dst)
+        # garde la dernière image source pour le lot suivant
+        self._prev_last = os.path.join(os.path.dirname(in_dir), "prev_last.png")
+        shutil.move(inputs[-1], self._prev_last)
+        self._src_seen += len(names)
+        shutil.rmtree(in_dir, ignore_errors=True)
+        shutil.rmtree(rife_out, ignore_errors=True)
+        return out_dir, out_index
+
     def _writer_thread(self, stdin, enc_q: queue.Queue) -> None:
         try:
+            last = b""
             while True:
                 item = self._get(enc_q)
                 if item is None:
@@ -836,10 +1183,15 @@ class Upscaler:
                         raise _Stopped()
                     p = os.path.join(out_dir, name)
                     with open(p, "rb") as f:
-                        stdin.write(f.read())
+                        last = f.read()
+                    stdin.write(last)
                     os.remove(p)
                     self._encoded += 1
                 shutil.rmtree(out_dir, ignore_errors=True)
+            # interpolation : la dernière image est répétée pour garder la durée exacte
+            for _ in range(getattr(self, "_tail_dups", 0) if last else 0):
+                stdin.write(last)
+                self._encoded += 1
             stdin.close()
         except _Stopped:
             pass

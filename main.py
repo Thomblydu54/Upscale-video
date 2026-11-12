@@ -75,6 +75,78 @@ def selftest(report_path: str) -> int:
 
     check("probe", probe_clip)
 
+    # --- interpolation (RIFE)
+    check("rife", lambda: tools.find_tool(engine.RIFE_BIN))
+
+    def rife_model():
+        files = sorted(os.listdir(engine.rife_model_dir()))
+        if not any(f.endswith(".param") for f in files) or not any(f.endswith(".bin") for f in files):
+            raise FileNotFoundError(f"{engine.rife_model_dir()} : {files}")
+        return ", ".join(files)
+
+    check(f"modèle {engine.RIFE_MODEL}", rife_model)
+
+    # --- images : détection et format de sortie
+    def image_detect():
+        tmp = tempfile.mkdtemp(prefix="upv_selftest_")
+        out = []
+        for name in ("photo.png", "photo.jpg", "photo.webp"):
+            path = os.path.join(tmp, name)
+            tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                       "-f", "lavfi", "-i", "testsrc2=size=300x200", "-frames:v", "1", path],
+                      check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            info = engine.probe(path)
+            if not info.is_image:
+                raise RuntimeError(f"{name} pris pour une vidéo")
+            st = engine.Settings(output_size="x2")
+            plan = engine.make_plan(info, st)
+            dst = engine.default_output_path(info, st, plan)
+            out.append(f"{name} -> {os.path.basename(dst)}")
+        return "; ".join(out)
+
+    check("images (détection)", image_detect)
+
+    # --- vrai RIFE sur le processeur (-g -1) : valide tout le pipeline d'interpolation
+    def rife_cpu_pipeline():
+        tmp = tempfile.mkdtemp(prefix="upv_rife_")
+        clip = os.path.join(tmp, "clip.mp4")
+        ff = tools.find_tool("ffmpeg")
+        tools.run([ff, "-hide_banner", "-loglevel", "error", "-y",
+                   "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=10:duration=1.5",
+                   "-f", "lavfi", "-i", "smptebars=size=96x64:rate=10:duration=1.5",
+                   "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v]", "-map", "[v]",
+                   "-pix_fmt", "yuv420p", clip], check=True,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        orig = engine.make_plan
+
+        def small_batches(info, st):
+            plan = orig(info, st)
+            plan.batch_size = 7
+            return plan
+
+        engine.make_plan = small_batches
+        logs = []
+        try:
+            up = engine.Upscaler(on_log=logs.append)
+            out = up.process(clip, engine.Settings(output_size="x1", interpolation="x2", gpu="-1"))
+        except engine.UpscaleError as e:
+            if "RIFE" in str(e):
+                lines.append(f"INFO rife-cpu: impossible ici ({str(e)[:300]!r})")
+                return "ignoré"
+            raise
+        finally:
+            engine.make_plan = orig
+        r = tools.run([tools.find_tool("ffprobe"), "-v", "error", "-count_frames", "-select_streams",
+                       "v:0", "-show_entries", "stream=nb_read_frames,r_frame_rate", "-of", "csv=p=0",
+                       out], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        rate, frames = r.stdout.decode().strip().split(",")[:2]
+        if int(frames) != 60 or rate != "20/1":
+            raise RuntimeError(f"attendu 60 images à 20/1, obtenu {frames} à {rate}")
+        cuts = [l for l in logs if "changement" in l]
+        return f"30 → {frames} images, {rate} i/s, {cuts[-1] if cuts else ''}"
+
+    check("interpolation RIFE (processeur)", rife_cpu_pipeline)
+
     def frame_grab():
         tmp = tempfile.mkdtemp(prefix="upv_selftest_")
         clip = os.path.join(tmp, "clip.mp4")

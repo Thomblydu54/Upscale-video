@@ -13,8 +13,8 @@ const ICONS = {
   brush: '<path d="M9.06 11.9l8.07-8.06a2.85 2.85 0 114.03 4.03l-8.06 8.08"/><path d="M7.07 14.94C5.4 14.94 4 16.3 4 18c0 1.3-1.3 2-2 2 1 1.6 2.6 2 4 2 2.2 0 4-1.8 4-4 0-1.7-1.3-3.06-2.93-3.06z"/>',
   star: '<path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/>',
 };
-const SIZE_MAIN = { x2: '×2', x3: '×3', x4: '×4', '720p': '720p', '1080p': '1080p', '1440p': '1440p', '2160p': '4K', '4320p': '8K' };
-const SIZE_SUB = { x2: 'double', x3: 'triple', x4: 'quadruple', '720p': 'HD', '1080p': 'Full HD', '1440p': '2K', '2160p': 'Ultra HD', '4320p': 'extrême' };
+const SIZE_MAIN = { x2: '×2', x3: '×3', x4: '×4', '720p': '720p', '1080p': '1080p', '1440p': '1440p', '2160p': '4K', '4320p': '8K', x1: "Taille d'origine" };
+const SIZE_SUB = { x2: 'double', x3: 'triple', x4: 'quadruple', '720p': 'HD', '1080p': 'Full HD', '1440p': '2K', '2160p': 'Ultra HD', '4320p': 'extrême', x1: 'sans agrandissement · fluidité seule' };
 
 let API = null;
 const S = { settings: {}, models: [], files: [], thumbs: new Map(), running: false, task: '', demo: false };
@@ -122,6 +122,8 @@ function applySettings() {
   segSet('#container', st.container);
   segSet('#speed', st.speed);
   segSet('#deinterlace', st.deinterlace);
+  segSet('#interpolation', st.interpolation || 'off');
+  segSet('#image_format', st.image_format || 'auto');
   $('#tile').value = String(st.tile ?? 0);
   $('#tta').checked = !!st.tta;
   $('#autoUpdate').checked = st.auto_update !== false;
@@ -158,8 +160,18 @@ async function setSetting(key, value) {
 
 function updateSizeHint() {
   const f = S.files.find((x) => x.res && x.out);
-  $('#sizeHint').textContent = f ? `${f.res} → ${f.out}` : '';
+  $('#sizeHint').textContent = f ? `${f.res} → ${f.out.split(' · ')[0]}` : '';
+  const v = S.files.find((x) => x.kind !== 'image' && x.fps);
+  const k = { x2: 2, x3: 3, x4: 4 }[S.settings.interpolation] || 1;
+  $('#fpsHint').textContent = v ? (k > 1 ? `${fmtFps(v.fps)} → ${fmtFps(v.fps * k)} i/s` : `${fmtFps(v.fps)} i/s`) : '';
+  // exemples adaptés à la première vidéo
+  const base = v ? v.fps : 30;
+  $$('#interpolation button').forEach((b) => {
+    const m = { x2: 2, x3: 3 }[b.dataset.v];
+    if (m) $('small', b).textContent = `${fmtFps(base * m)} i/s`;
+  });
 }
+const fmtFps = (x) => String(Math.round(x * 100) / 100).replace('.', ',');
 
 /* ------------------------------------------------------------------ interactions */
 function bindUi() {
@@ -170,7 +182,7 @@ function bindUi() {
   $('#cancelBtn').addEventListener('click', () => API.cancel());
   $('#previewBtn').addEventListener('click', () => {
     const f = S.files.find((x) => x.state !== 'probing' && x.state !== 'error' && x.res) || S.files.find((x) => x.res);
-    if (!f) { toast('info', 'Aucune vidéo', 'Ajoutez une vidéo pour générer un aperçu.'); return; }
+    if (!f) { toast('info', 'Aucun fichier', 'Ajoutez une vidéo ou une image pour générer un aperçu.'); return; }
     openPicker(f.id);
   });
   $('#quality').addEventListener('input', updateRange);
@@ -181,7 +193,7 @@ function bindUi() {
   $('#tta').addEventListener('change', (e) => setSetting('tta', e.target.checked));
   $('#autoUpdate').addEventListener('change', (e) => setSetting('auto_update', e.target.checked));
   $('#version').addEventListener('click', () => API.check_update(true));
-  for (const [sel, key] of [['#container', 'container'], ['#speed', 'speed'], ['#deinterlace', 'deinterlace']]) {
+  for (const [sel, key] of [['#container', 'container'], ['#speed', 'speed'], ['#deinterlace', 'deinterlace'], ['#interpolation', 'interpolation'], ['#image_format', 'image_format']]) {
     $$(sel + ' button').forEach((b) => b.addEventListener('click', () => setSetting(key, b.dataset.v)));
   }
   $('#outdirField').addEventListener('click', async (e) => {
@@ -353,6 +365,7 @@ function createCard(f) {
       <img alt="">
       <div class="res-badge"><span class="from"></span><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span class="to"></span></div>
       <div class="dur-badge"></div>
+      <div class="kind-badge img" hidden><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="9" cy="9" r="2"/><path d="M21 15l-5-5L5 21"/></svg>Image</div>
       <button class="card-eye" title="Choisir une image et voir le résultat de l'IA"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Aperçu</button>
       <button class="card-x" title="Retirer">×</button>
       <div class="overlay">
@@ -399,8 +412,12 @@ function updateCard(el, f) {
   $('.size', el).textContent = fmtSize(f.size);
   $('.from', el).textContent = f.res || '…';
   $('.to', el).textContent = f.out || '…';
-  $('.dur-badge', el).textContent = f.dur || '';
-  $('.dur-badge', el).hidden = !f.dur;
+  const isImg = f.kind === 'image';
+  $('.dur-badge', el).textContent = isImg ? '' : (f.dur || '');
+  $('.dur-badge', el).hidden = isImg || !f.dur;
+  $('.kind-badge.img', el).hidden = !isImg;
+  $('.play', el).lastChild.textContent = isImg ? 'Ouvrir' : 'Lire';
+  $('.card-eye', el).title = isImg ? "Voir le résultat de l'IA" : "Choisir une image et voir le résultat de l'IA";
   const pct = Math.round((f.progress || 0) * 100);
   $('.ring span', el).textContent = pct + '%';
   $('.ring .val', el).style.strokeDashoffset = 201 - 201 * (f.progress || 0);
@@ -423,8 +440,12 @@ function syncFiles(list) {
   $('#dropzone').hidden = n > 0;
   $('#clearBtn').hidden = n === 0;
   const done = list.filter((f) => f.state === 'done').length;
-  $('#fileCount').textContent = n === 0 ? 'Aucune vidéo pour le moment'
-    : `${n} vidéo${n > 1 ? 's' : ''}${done ? ` · ${done} terminée${done > 1 ? 's' : ''}` : ''}`;
+  const nImg = list.filter((f) => f.kind === 'image').length, nVid = n - nImg;
+  const parts = [];
+  if (nVid) parts.push(`${nVid} vidéo${nVid > 1 ? 's' : ''}`);
+  if (nImg) parts.push(`${nImg} image${nImg > 1 ? 's' : ''}`);
+  $('#fileCount').textContent = n === 0 ? 'Aucun fichier pour le moment'
+    : `${parts.join(' · ')}${done ? ` · ${done} terminé${done > 1 ? 's' : ''}` : ''}`;
   updateSizeHint();
 }
 
@@ -462,7 +483,7 @@ function syncRun(r) {
     setRing(0);
     $('#barFill').style.width = '0%';
     const ready = S.files.filter((f) => f.state === 'ready').length;
-    $('#taskTitle').textContent = ready ? `${ready} vidéo${ready > 1 ? 's' : ''} prête${ready > 1 ? 's' : ''} à être agrandie${ready > 1 ? 's' : ''}` : 'Prêt à agrandir vos vidéos';
+    $('#taskTitle').textContent = ready ? `${ready} fichier${ready > 1 ? 's' : ''} prêt${ready > 1 ? 's' : ''} à traiter` : 'Prêt à améliorer vos vidéos et images';
   }
 }
 
@@ -495,10 +516,12 @@ const PK = { fid: null, frames: 1, fps: 25, index: 0, seq: 0, mode: 'pick', reme
 
 function setPvMode(mode) {
   PK.mode = mode;
+  $('#pvBack').hidden = !!PK.isImage;
   const card = $('#pvCard');
   card.classList.toggle('mode-pick', mode === 'pick');
   card.classList.toggle('mode-compare', mode === 'compare');
   $('#pvTitle').textContent = mode === 'pick' ? "Choisir l'image à prévisualiser" : 'Aperçu IA';
+  if (mode === 'pick') $('#pvBack').hidden = true;
   if (mode === 'compare') requestAnimationFrame(() => cmpZoom(CMP.mode === 'custom' ? 'fit' : CMP.mode));
 }
 
@@ -507,6 +530,14 @@ async function openPicker(fid) {
   if (!info || !info.frames) { toast('warn', 'Vidéo pas encore analysée', 'Patientez une seconde puis réessayez.'); return; }
   PK.fid = fid; PK.frames = info.frames; PK.fps = info.fps || 25;
   $('#pvName').textContent = '· ' + info.name;
+  if (info.kind === 'image') {           // une image : pas de choix d'image, aperçu direct
+    PK.index = 0; PK.isImage = true;
+    $('#pvChips').innerHTML = `<span>${esc(info.res)}</span><span class="hl">→ ${esc(info.out)}</span>`;
+    $('#previewModal').hidden = false;
+    generatePreview();
+    return;
+  }
+  PK.isImage = false;
   $('#pvChips').innerHTML = `<span>${esc(info.res)}</span><span class="hl">→ ${esc(info.out)}</span>`;
   $('#pkRange').max = Math.max(0, info.frames - 1);
   $('#pkImg').removeAttribute('src');
@@ -577,7 +608,8 @@ function parseClock(text) {
 
 function generatePreview() {
   if (S.running) { toast('info', 'Patientez', 'Un traitement est déjà en cours.'); return; }
-  $('#pvLoadingSub').textContent = `Agrandissement de l'image ${PK.index + 1} (${frameLabel(PK.index)})`;
+  $('#pvLoadingSub').textContent = PK.isImage ? "Agrandissement de l'image par l'IA"
+    : `Agrandissement de l'image ${PK.index + 1} (${frameLabel(PK.index)})`;
   $('#pvLoading').hidden = false;
   $('#pvAfter').removeAttribute('src');
   $('#pvBefore').removeAttribute('src');
@@ -604,6 +636,7 @@ function showPreview(ev) {
   $('#pvModel').textContent = model ? model.name : '';
   $('#pvChips').innerHTML = `<span>${esc(ev.source)}</span><span class="hl">→ ${esc(ev.output)}</span>` +
     `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.time ? `<span>Image ${ev.index + 1} · ${esc(ev.time)}</span>` : '');
+  $('#pvBack').hidden = !!PK.isImage || !ev.time;
   CMP.w = ev.width; CMP.h = ev.height; CMP.x = 0.5;
   let loaded = 0;
   const done = () => { if (++loaded === 2) { $('#pvLoading').hidden = true; cmpZoom('fit'); } };

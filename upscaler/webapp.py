@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+from fractions import Fraction
 import json
 import os
 import subprocess
@@ -13,11 +14,12 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, engine, tools, updater
-from .engine import (ENCODERS, MODELS, OUTPUT_SIZES, SPEEDS, Cancelled, Settings, Upscaler,
-                     UpscaleError, fmt_time, fmt_time_ms)
+from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, OUTPUT_SIZES,
+                     SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time, fmt_time_ms)
 
 VIDEO_EXT = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v", ".mpg",
-             ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".3gp", ".ogv", ".divx", ".asf")
+             ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".3gp", ".ogv", ".divx", ".asf", ".gif")
+MEDIA_EXT = VIDEO_EXT + IMAGE_EXT
 WEBVIEW2_GUID = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
 
 # Métadonnées d'affichage des modèles (vitesse / qualité sur 5, icône)
@@ -72,7 +74,7 @@ def _thumbnail(path: str, duration: float) -> str:
     """Miniature JPEG (data URI) extraite à ~15 % de la vidéo."""
     t = duration * 0.15 if duration and duration > 2 else 0
     proc = tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
-                      "-ss", f"{t:.2f}", "-i", path, "-frames:v", "1",
+                      *engine._seek(t), "-i", path, "-frames:v", "1",
                       "-vf", "scale=480:-2:flags=bicubic", "-q:v", "4",
                       "-f", "image2pipe", "-c:v", "mjpeg", "-"],
                      stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=60)
@@ -162,7 +164,7 @@ class Api:
 
     def _file_public(self, f: dict, with_thumb: bool = False) -> dict:
         d = {k: f[k] for k in ("id", "name", "path", "status", "state", "progress", "res", "dur",
-                               "out", "size", "output", "error")}
+                               "out", "size", "output", "error", "kind", "fps")}
         if with_thumb:
             d["thumb"] = f.get("thumb", "")
         return d
@@ -174,8 +176,10 @@ class Api:
         try:
             plan = engine.make_plan(info, self._settings)
             f["out"] = f"{plan.out_w}×{plan.out_h}"
+            if plan.interp > 1:
+                f["out"] += f" · {round(float(Fraction(plan.out_fps)), 2):g} i/s"
         except UpscaleError:
-            f["out"] = "déjà ≥"
+            f["out"] = "déjà ≥" if self._settings.output_size != "x1" else "inchangé"
 
     def _add_paths(self, paths) -> list:
         added = []
@@ -188,7 +192,7 @@ class Api:
                 p = os.path.normpath(str(p))
                 if os.path.isdir(p):
                     for name in sorted(os.listdir(p)):
-                        if name.lower().endswith(VIDEO_EXT):
+                        if name.lower().endswith(MEDIA_EXT):
                             expanded.append(os.path.join(p, name))
                 elif os.path.isfile(p):
                     expanded.append(p)
@@ -204,7 +208,8 @@ class Api:
                     size = 0
                 f = {"id": fid, "name": os.path.basename(p), "path": p, "status": "Analyse…",
                      "state": "probing", "progress": 0.0, "res": "", "dur": "", "out": "",
-                     "size": size, "output": "", "error": "", "thumb": "", "info": None}
+                     "size": size, "output": "", "error": "", "thumb": "", "info": None,
+                     "kind": "image" if p.lower().endswith(IMAGE_EXT) else "video", "fps": 0}
                 self._files[fid] = f
                 self._order.append(fid)
                 added.append(self._file_public(f))
@@ -222,7 +227,9 @@ class Api:
             with self._lock:
                 f["info"] = info
                 f["res"] = f"{info.width}×{info.height}"
-                f["dur"] = fmt_time(info.duration)
+                f["kind"] = "image" if info.is_image else "video"
+                f["fps"] = 0 if info.is_image else round(info.fps_float, 3)
+                f["dur"] = "Image" if info.is_image else fmt_time(info.duration)
                 f["status"] = "Prêt"
                 f["state"] = "ready"
                 self._compute_out(f)
@@ -254,6 +261,8 @@ class Api:
             "sizes": [{"key": k, "label": lbl} for k, lbl in OUTPUT_SIZES],
             "encoders": [{"key": e.key, "label": e.label} for e in ENCODERS],
             "speeds": [{"key": k, "label": lbl} for k, lbl in SPEEDS],
+            "interpolations": [{"key": k, "label": lbl} for k, lbl in INTERPOLATIONS],
+            "image_formats": [{"key": k, "label": lbl} for k, lbl in IMAGE_FORMATS],
             "settings": self._settings.to_dict(),
             "gpus": self._gpus,
             "files": files,
@@ -271,7 +280,10 @@ class Api:
 
     def pick_files(self) -> list:
         import webview
-        types = ("Vidéos (" + ";".join("*" + e for e in VIDEO_EXT) + ")", "Tous les fichiers (*.*)")
+        types = ("Vidéos et images (" + ";".join("*" + e for e in MEDIA_EXT) + ")",
+                 "Vidéos (" + ";".join("*" + e for e in VIDEO_EXT) + ")",
+                 "Images (" + ";".join("*" + e for e in IMAGE_EXT) + ")",
+                 "Tous les fichiers (*.*)")
         try:
             paths = self._window.create_file_dialog(webview.FileDialog.OPEN, allow_multiple=True,
                                                     file_types=types)
@@ -332,7 +344,7 @@ class Api:
                     if self._files[fid]["state"] in ("ready", "error", "cancelled")
                     and self._files[fid].get("info")]
             if not todo:
-                self._toast("info", "Rien à traiter", "Ajoutez une vidéo (ou retirez celles déjà terminées).")
+                self._toast("info", "Rien à traiter", "Ajoutez une vidéo ou une image (ou retirez celles déjà terminées).")
                 return False
             self._running = True
             self._task = "queue"
@@ -414,7 +426,7 @@ class Api:
         info = f["info"]
         return {"id": f["id"], "name": f["name"], "fps": info.fps_float, "frames": max(1, info.frames),
                 "duration": info.duration, "width": info.width, "height": info.height,
-                "res": f["res"], "out": f["out"]}
+                "res": f["res"], "out": f["out"], "kind": "image" if info.is_image else "video"}
 
     def get_frame(self, fid, index, width=1280) -> dict:
         f = self._files.get(int(fid))
@@ -571,11 +583,11 @@ class Api:
             if cancelled:
                 self._toast("info", "Traitement annulé")
             elif failed:
-                self._toast("error", f"{failed} vidéo(s) en erreur",
+                self._toast("error", f"{failed} fichier(s) en erreur",
                             "Ouvrez le journal pour voir le détail.")
             elif ok:
-                self._toast("success", f"{ok} vidéo(s) terminée(s) en {elapsed}",
-                            "Vos vidéos en haute résolution sont prêtes.")
+                self._toast("success", f"{ok} fichier(s) terminé(s) en {elapsed}",
+                            "Vos fichiers améliorés sont prêts.")
 
     def _run_preview(self, fid: int, settings: Settings, index=None) -> None:
         f = self._files.get(fid)
@@ -586,7 +598,7 @@ class Api:
                 index = int(info.frames * 0.5)
             index = max(0, min(int(index), max(0, info.frames - 1)))
             t = self._frame_time(info, index)
-            label = fmt_time_ms(index / info.fps_float)
+            label = "" if info.is_image else fmt_time_ms(index / info.fps_float)
             self._emit(type="preview_started", id=fid, name=f["name"], index=index, time=label)
             cmp_, ai = self._upscaler.preview(f["path"], settings, time_s=t)
             plan = engine.make_plan(info, settings)

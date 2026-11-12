@@ -9,7 +9,7 @@
     { key: 'realesr-animevideov3', name: 'Anime Rapide', sub: 'Dessins animés, 2D, x2/x3/x4', description: 'Très rapide.', scales: [2, 3, 4], speed: 5, quality: 4, icon: 'brush', tag: 'Anime rapide' },
     { key: 'realesrgan-x4plus-anime', name: 'Anime Pro', sub: 'Anime net et fidèle, plus lent', description: 'Plus net, plus lent.', scales: [4], speed: 2, quality: 5, icon: 'star', tag: 'Anime HQ' },
   ];
-  const SIZES = [['x2', 'x2'], ['x3', 'x3'], ['x4', 'x4'], ['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p'], ['2160p', '4K'], ['4320p', '8K']];
+  const SIZES = [['x2', 'x2'], ['x3', 'x3'], ['x4', 'x4'], ['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p'], ['2160p', '4K'], ['4320p', '8K'], ['x1', "Taille d'origine"]];
   const ENCODERS = [
     ['x264', 'H.264 – CPU (compatible partout)'], ['x265', 'H.265/HEVC – CPU (fichiers plus légers)'],
     ['nvenc_h264', 'H.264 – NVIDIA NVENC (très rapide)'], ['nvenc_hevc', 'H.265 – NVIDIA NVENC (très rapide)'],
@@ -19,8 +19,9 @@
     { name: 'Tokyo_nuit_2009.mp4', w: 640, h: 360, dur: '00:04:12', size: 187e6, img: 'city' },
     { name: 'Le_voyage_episode01.mkv', w: 854, h: 480, dur: '00:23:40', size: 412e6, img: 'anime' },
     { name: 'Vacances_plage_camescope.avi', w: 720, h: 576, dur: '00:12:05', size: 890e6, img: 'family' },
+    { name: 'Photo_mariage_1998.jpg', w: 800, h: 450, dur: 'Image', size: 2.4e6, img: 'family', kind: 'image' },
   ];
-  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true };
+  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true, interpolation: 'off', image_format: 'auto' };
   let files = [];
   let nextId = 1;
   let events = [];
@@ -31,17 +32,21 @@
 
   function outFor(f) {
     const k = settings.output_size;
+    const m = { x2: 2, x3: 3, x4: 4 }[settings.interpolation] || 1;
+    const isImg = f.kind === 'image';
     let fac = k.startsWith('x') ? Number(k.slice(1)) : Number(k.replace('p', '')) / Math.min(f.w, f.h);
-    if (fac <= 1) return 'déjà ≥';
+    if (fac <= 1 && (isImg || m === 1)) return k === 'x1' ? 'inchangé' : 'déjà ≥';
+    if (fac < 1) fac = 1;
     const ev = (x) => Math.max(2, Math.round(x / 2) * 2);
-    return `${ev(f.w * fac)}×${ev(f.h * fac)}`;
+    return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${f.fps * m} i/s` : '');
   }
   function pub(f) { return { ...f, out: outFor(f) }; }
 
   function addSample(s) {
     const f = { id: nextId++, name: s.name, path: 'C:\\Users\\Vous\\Vidéos\\' + s.name, status: 'Prêt', state: 'ready', progress: 0,
       res: `${s.w}×${s.h}`, dur: s.dur, out: '', size: s.size, output: '', error: '', w: s.w, h: s.h, img: s.img,
-      frames: s.dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) * 25 };
+      kind: s.kind || 'video', fps: s.kind ? 0 : 25,
+      frames: s.kind ? 1 : s.dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) * 25 };
     files.push(f);
     setTimeout(() => events.push({ type: 'thumb', id: f.id, thumb: `demo/${s.img}_thumb.jpg` }), 300 + Math.random() * 600);
     return pub(f);
@@ -87,7 +92,7 @@
   window.MockApi = {
     async frame_info(id) {
       const f = files.find((x) => x.id === id); if (!f) return {};
-      return { id, name: f.name, fps: 25, frames: f.frames, duration: f.frames / 25, width: f.w, height: f.h, res: f.res, out: outFor(f) };
+      return { id, name: f.name, fps: 25, frames: f.frames, duration: f.frames / 25, width: f.w, height: f.h, res: f.res, out: outFor(f), kind: f.kind };
     },
     async get_frame(id, index, width) {
       const f = files.find((x) => x.id === id); if (!f) return {};
@@ -102,8 +107,8 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.3.0', tag: 'v1.3.0', current: '1.2.0', size: 254e6, can_install: true, page: '#',
-        notes: "## Nouveautés\n- **Interpolation d'images** : vidéos plus fluides (60 i/s)\n- Restauration des visages par IA\n- Corrections de bugs" });
+      events.push({ type: 'update', version: '1.4.0', tag: 'v1.4.0', current: '1.3.0', size: 254e6, can_install: true, page: '#',
+        notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
     async install_update() {
@@ -111,7 +116,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.3.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.4.0' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -122,10 +127,12 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.2.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.3.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
+        interpolations: [{ key: 'off', label: 'Désactivée' }, { key: 'x2', label: 'x2' }, { key: 'x3', label: 'x3' }, { key: 'x4', label: 'x4' }],
+        image_formats: [{ key: 'auto', label: 'Identique' }, { key: 'png', label: 'PNG' }, { key: 'jpg', label: 'JPEG' }, { key: 'webp', label: 'WebP' }],
       };
     },
     async poll() {
@@ -148,11 +155,11 @@
       if (!f) { events.push({ type: 'toast', kind: 'info', title: 'Aucune vidéo', text: 'Ajoutez une vidéo pour générer un aperçu.' }); return false; }
       if (index == null) index = Math.floor(f.frames / 2);
       running = true; task = 'preview';
-      events.push({ type: 'preview_started', id: f.id, name: f.name, index, time: fmtClock(index / 25) });
+      events.push({ type: 'preview_started', id: f.id, name: f.name, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
       log(`Aperçu : ${f.name}, image ${index + 1}`);
       const hq = await renderFrame(f, index, 1280);
       blurred(hq, (before, W, H) => setTimeout(() => {
-        events.push({ type: 'preview_done', id: f.id, before, after: hq, width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: fmtClock(index / 25) });
+        events.push({ type: 'preview_done', id: f.id, before, after: hq, width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
         running = false; task = '';
       }, 1600));
       return true;

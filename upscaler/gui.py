@@ -13,12 +13,13 @@ from tkinter import filedialog, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 from . import __version__, engine, tools
-from .engine import (ENCODERS, MODELS, MODELS_BY_KEY, OUTPUT_SIZES, SPEEDS, Cancelled,
-                     Settings, Upscaler, UpscaleError, fmt_time)
+from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, MODELS_BY_KEY,
+                     OUTPUT_SIZES, SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time)
 
 APP_TITLE = "Upscale Video AI"
 VIDEO_EXT = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v", ".mpg",
-             ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".3gp", ".ogv", ".divx", ".asf")
+             ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".3gp", ".ogv", ".divx", ".asf", ".gif")
+MEDIA_EXT = VIDEO_EXT + IMAGE_EXT
 
 try:  # glisser-déposer (optionnel)
     from tkinterdnd2 import DND_FILES, TkinterDnD  # type: ignore
@@ -223,6 +224,10 @@ class App:
         self.cb_size = LabeledCombo(sf, OUTPUT_SIZES, command=self._refresh_outputs)
         row("Résolution de sortie", self.cb_size.widget)
 
+        self.cb_interp = LabeledCombo(sf, INTERPOLATIONS)
+        row("Fluidité (interpolation IA)", self.cb_interp.widget,
+            ttk.Label(sf, text="RIFE crée des images intermédiaires (vidéos uniquement)", style="Sub.TLabel"))
+
         self.cb_encoder = LabeledCombo(sf, [(e.key, e.label) for e in ENCODERS])
         row("Encodeur vidéo", self.cb_encoder.widget)
 
@@ -241,7 +246,10 @@ class App:
 
         self.cb_container = LabeledCombo(sf, [("mp4", "MP4 (recommandé)"),
                                               ("mkv", "MKV (garde tous les sous-titres)")])
-        row("Format", self.cb_container.widget)
+        row("Format des vidéos", self.cb_container.widget)
+
+        self.cb_imgfmt = LabeledCombo(sf, IMAGE_FORMATS)
+        row("Format des images", self.cb_imgfmt.widget)
 
         out = ttk.Frame(sf)
         out.columnconfigure(0, weight=1)
@@ -310,13 +318,16 @@ class App:
 
     # ------------------------------------------------------------------ réglages
     def _collect_settings(self) -> Settings:
-        return Settings(
+        import dataclasses
+        return dataclasses.replace(
+            getattr(self, "_loaded_settings", None) or Settings(),
             model=self.cb_model.get(), output_size=self.cb_size.get(),
             encoder=self.cb_encoder.get(), quality=int(round(self.scale_quality.get())),
             speed=self.cb_speed.get(), deinterlace=self.cb_deint.get(), gpu=str(self.cb_gpu.get()),
             tile=int(self.cb_tile.get() or 0), tta=bool(self.var_tta.get()),
             container=self.cb_container.get(), output_dir=self.var_outdir.get().strip(),
-            temp_dir=self.var_tmpdir.get().strip())
+            temp_dir=self.var_tmpdir.get().strip(), interpolation=self.cb_interp.get(),
+            image_format=self.cb_imgfmt.get())
 
     def _load_settings(self):
         data = {}
@@ -326,6 +337,9 @@ class App:
         except Exception:
             pass
         s = Settings.from_dict(data)
+        self._loaded_settings = s
+        self.cb_interp.set(s.interpolation)
+        self.cb_imgfmt.set(s.image_format)
         self.cb_model.set(s.model)
         self.cb_size.set(s.output_size)
         self.cb_encoder.set(s.encoder)
@@ -371,7 +385,9 @@ class App:
     def _add_dialog(self):
         paths = filedialog.askopenfilenames(
             title="Choisir des vidéos",
-            filetypes=[("Vidéos", " ".join("*" + e for e in VIDEO_EXT)), ("Tous les fichiers", "*.*")])
+            filetypes=[("Vidéos et images", " ".join("*" + e for e in MEDIA_EXT)),
+                       ("Vidéos", " ".join("*" + e for e in VIDEO_EXT)),
+                       ("Images", " ".join("*" + e for e in IMAGE_EXT)), ("Tous les fichiers", "*.*")])
         self._add_files(paths)
 
     def _on_drop(self, event):
@@ -383,7 +399,7 @@ class App:
         for p in paths:
             if os.path.isdir(p):
                 for name in sorted(os.listdir(p)):
-                    if name.lower().endswith(VIDEO_EXT):
+                    if name.lower().endswith(MEDIA_EXT):
                         expanded.append(os.path.join(p, name))
             else:
                 expanded.append(p)

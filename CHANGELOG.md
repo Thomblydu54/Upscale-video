@@ -1,5 +1,11 @@
 # Journal des modifications
 
+## v1.3.0
+- **Interpolation d'images par IA (RIFE v4.6)** : vidéos 2, 3 ou 4 fois plus fluides (par exemple 30 → 60 i/s). Les changements de plan sont détectés automatiquement, pour ne jamais mélanger deux scènes. Elle se combine avec l'agrandissement, ou s'utilise seule (« Taille d'origine »).
+- **Les images restent des images** : une photo PNG, JPG ou WebP donne maintenant une image agrandie, et non plus une vidéo MP4. La transparence des PNG est conservée. Le format de sortie se choisit : identique, PNG, JPG ou WebP.
+- L'aperçu d'une image s'ouvre directement, sans étape de choix d'image. Les cartes affichent un badge « Image ».
+- Correction : l'aperçu IA d'une image ne fonctionnait pas.
+
 ## v1.2.0
 - **Choix de l'image d'aperçu** : une pellicule et une ligne de temps permettent de choisir précisément l'image à améliorer. On avance image par image (← →), seconde par seconde (Maj + ← →), on saisit un temps exact ou on tire une image au hasard.
 - **Mises à jour automatiques** : l'application vérifie au démarrage si une nouvelle version existe, puis la télécharge (avec vérification SHA-256) et l'installe en un clic avant de redémarrer.
