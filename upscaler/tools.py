@@ -52,10 +52,71 @@ def find_tool(name: str) -> str:
     raise ToolMissing(f"Outil introuvable : {name}{EXE} (attendu dans {bin_dir()})")
 
 
+_KILL_JOB = None
+
+
+def _kill_with_app(proc: subprocess.Popen) -> None:
+    """Windows : rattache l'outil (ffmpeg, IA…) à un « Job Object » qui le termine
+    automatiquement si l'application se ferme brutalement (plantage, gestionnaire des tâches),
+    pour qu'il ne continue pas à tourner en arrière-plan ni ne bloque la reprise."""
+    global _KILL_JOB
+    if not IS_WIN:
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        if _KILL_JOB is None:
+            class IO_COUNTERS(ctypes.Structure):
+                _fields_ = [(n, ctypes.c_ulonglong) for n in (
+                    "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                    "ReadTransferCount", "WriteTransferCount", "OtherTransferCount")]
+
+            class BASIC_LIMIT(ctypes.Structure):
+                _fields_ = [("PerProcessUserTimeLimit", ctypes.c_int64),
+                            ("PerJobUserTimeLimit", ctypes.c_int64),
+                            ("LimitFlags", wintypes.DWORD),
+                            ("MinimumWorkingSetSize", ctypes.c_size_t),
+                            ("MaximumWorkingSetSize", ctypes.c_size_t),
+                            ("ActiveProcessLimit", wintypes.DWORD),
+                            ("Affinity", ctypes.c_size_t),
+                            ("PriorityClass", wintypes.DWORD),
+                            ("SchedulingClass", wintypes.DWORD)]
+
+            class EXT_LIMIT(ctypes.Structure):
+                _fields_ = [("BasicLimitInformation", BASIC_LIMIT), ("IoInfo", IO_COUNTERS),
+                            ("ProcessMemoryLimit", ctypes.c_size_t),
+                            ("JobMemoryLimit", ctypes.c_size_t),
+                            ("PeakProcessMemoryUsed", ctypes.c_size_t),
+                            ("PeakJobMemoryUsed", ctypes.c_size_t)]
+
+            k32.CreateJobObjectW.restype = wintypes.HANDLE
+            k32.CreateJobObjectW.argtypes = (ctypes.c_void_p, wintypes.LPCWSTR)
+            k32.SetInformationJobObject.argtypes = (wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p,
+                                                    wintypes.DWORD)
+            job = k32.CreateJobObjectW(None, None)
+            if not job:
+                _KILL_JOB = 0
+                return
+            info = EXT_LIMIT()
+            info.BasicLimitInformation.LimitFlags = 0x2000  # JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
+            if not k32.SetInformationJobObject(job, 9, ctypes.byref(info), ctypes.sizeof(info)):
+                _KILL_JOB = 0
+                return
+            _KILL_JOB = job  # handle volontairement jamais fermé (fermé par Windows à la sortie)
+        if _KILL_JOB:
+            k32.AssignProcessToJobObject.argtypes = (wintypes.HANDLE, wintypes.HANDLE)
+            k32.AssignProcessToJobObject(_KILL_JOB, int(proc._handle))
+    except Exception:  # noqa: BLE001
+        _KILL_JOB = 0
+
+
 def popen(args, **kwargs) -> subprocess.Popen:
     if IS_WIN:
         kwargs.setdefault("creationflags", CREATE_NO_WINDOW)
-    return subprocess.Popen([str(a) for a in args], **kwargs)
+    proc = subprocess.Popen([str(a) for a in args], **kwargs)
+    _kill_with_app(proc)
+    return proc
 
 
 def run(args, **kwargs) -> subprocess.CompletedProcess:

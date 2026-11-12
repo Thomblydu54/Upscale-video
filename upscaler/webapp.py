@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import base64
+import copy
 from fractions import Fraction
 import json
 import os
@@ -14,6 +15,7 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, engine, tools, updater
+from .jobs import JobStore
 from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, OUTPUT_SIZES,
                      SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time, fmt_time_ms)
 
@@ -117,6 +119,12 @@ class Api:
         self._update: dict | None = None
         self._updating = False
         self._frame_pool = ThreadPoolExecutor(max_workers=4)
+        self._jobs = JobStore()
+        self._pause_req = False
+        self._cancel_req = False
+        self._closing_ok = False
+        self._restored = 0
+        self._restore_jobs()
         threading.Thread(target=self._detect_gpus, daemon=True).start()
 
     # ------------------------------------------------------------------ interne
@@ -165,6 +173,9 @@ class Api:
     def _file_public(self, f: dict, with_thumb: bool = False) -> dict:
         d = {k: f[k] for k in ("id", "name", "path", "status", "state", "progress", "res", "dur",
                                "out", "size", "output", "error", "kind", "fps")}
+        job = f.get("job")
+        d["frozen"] = job.data.get("summary", "") if job else ""
+        d["resumable"] = bool(job and (job.data.get("state") or {}).get("src_done"))
         if with_thumb:
             d["thumb"] = f.get("thumb", "")
         return d
@@ -173,13 +184,15 @@ class Api:
         info = f.get("info")
         if not info:
             return
+        # un fichier déjà lancé garde les réglages figés au moment du clic
+        settings = f["job"].settings if f.get("job") else self._settings
         try:
-            plan = engine.make_plan(info, self._settings)
+            plan = engine.make_plan(info, settings)
             f["out"] = f"{plan.out_w}×{plan.out_h}"
             if plan.interp > 1:
                 f["out"] += f" · {round(float(Fraction(plan.out_fps)), 2):g} i/s"
         except UpscaleError:
-            f["out"] = "déjà ≥" if self._settings.output_size != "x1" else "inchangé"
+            f["out"] = "déjà ≥" if settings.output_size != "x1" else "inchangé"
 
     def _add_paths(self, paths) -> list:
         added = []
@@ -209,7 +222,8 @@ class Api:
                 f = {"id": fid, "name": os.path.basename(p), "path": p, "status": "Analyse…",
                      "state": "probing", "progress": 0.0, "res": "", "dur": "", "out": "",
                      "size": size, "output": "", "error": "", "thumb": "", "info": None,
-                     "kind": "image" if p.lower().endswith(IMAGE_EXT) else "video", "fps": 0}
+                     "kind": "image" if p.lower().endswith(IMAGE_EXT) else "video", "fps": 0,
+                     "job": None}
                 self._files[fid] = f
                 self._order.append(fid)
                 added.append(self._file_public(f))
@@ -230,8 +244,9 @@ class Api:
                 f["kind"] = "image" if info.is_image else "video"
                 f["fps"] = 0 if info.is_image else round(info.fps_float, 3)
                 f["dur"] = "Image" if info.is_image else fmt_time(info.duration)
-                f["status"] = "Prêt"
-                f["state"] = "ready"
+                if not f.get("job"):
+                    f["status"] = "Prêt"
+                    f["state"] = "ready"
                 self._compute_out(f)
             try:
                 f["thumb"] = _thumbnail(f["path"], info.duration)
@@ -240,9 +255,18 @@ class Api:
             self._emit(type="thumb", id=fid, thumb=f["thumb"])
         except Exception as e:  # noqa: BLE001
             with self._lock:
+                job = f.get("job")
+                if job and f["state"] in ("running", "queued") and self._running:
+                    return  # le moteur signalera lui-même l'erreur
                 f["status"] = "Illisible"
                 f["state"] = "error"
                 f["error"] = str(e)
+                if job:
+                    if not os.path.exists(f["path"]):
+                        f["error"] = ("Le fichier source est introuvable (déplacé ou supprimé) : "
+                                      "le traitement en pause ne peut pas être repris.\n" + f["path"])
+                    f["job"] = None
+                    self._jobs.delete(job)
             self._log(f"Impossible de lire {f['name']} : {e}")
 
     # ------------------------------------------------------------------ API JS
@@ -267,6 +291,8 @@ class Api:
             "gpus": self._gpus,
             "files": files,
             "running": self._running,
+            "pending": self._pending_count(),
+            "restored": self._restored,
             "install_mode": updater.install_mode(),
         }
 
@@ -276,7 +302,8 @@ class Api:
             logs, self._logs = self._logs, []
             files = [self._file_public(self._files[i]) for i in self._order]
             return {"events": events, "logs": logs, "files": files, "running": self._running,
-                    "task": self._task, "progress": self._progress}
+                    "task": self._task, "progress": self._progress, "pending": self._pending_count(),
+                    "pausing": self._running and self._pause_req}
 
     def pick_files(self) -> list:
         import webview
@@ -316,12 +343,17 @@ class Api:
                 return False
             del self._files[fid]
             self._order.remove(fid)
+            if f.get("job"):
+                self._jobs.delete(f["job"])
         return True
 
     def clear_files(self) -> bool:
         with self._lock:
             if self._running:
                 return False
+            for f in self._files.values():
+                if f.get("job"):
+                    self._jobs.delete(f["job"])
             self._files.clear()
             self._order.clear()
         return True
@@ -337,32 +369,96 @@ class Api:
         return self._settings.to_dict()
 
     def start(self) -> bool:
+        """Lance (ou complète) la file d'attente.
+
+        Les fichiers prêts deviennent des traitements avec un INSTANTANÉ des réglages actuels :
+        modifier les réglages ensuite ne change rien pour eux (même après un redémarrage).
+        Les traitements en pause sont repris là où ils s'étaient arrêtés."""
         with self._lock:
+            if self._running and self._task != "queue":
+                return False
+            if self._running and self._pause_req:
+                self._toast("info", "Mise en pause en cours", "Patientez une seconde puis réessayez.")
+                return False
+            new = [fid for fid in self._order
+                   if self._files[fid]["state"] in ("ready", "error", "cancelled")
+                   and self._files[fid].get("info") and not self._files[fid].get("job")]
+            if not new and not self._pending_count():
+                if self._running:
+                    self._toast("info", "Déjà en file", "Ajoutez d'autres fichiers pour les mettre en file.")
+                else:
+                    self._toast("info", "Rien à traiter", "Ajoutez une vidéo ou une image (ou retirez celles déjà terminées).")
+                return False
+            snapshot = Settings.from_dict(self._settings.to_dict())  # réglages figés à cet instant
+            reserved = {f["job"].output for f in self._files.values() if f.get("job")}
+            added = 0
+            for fid in new:
+                f = self._files[fid]
+                try:
+                    plan = engine.make_plan(f["info"], snapshot)
+                    out = _unique_path(engine.default_output_path(f["info"], snapshot, plan), reserved)
+                except UpscaleError as e:
+                    f.update(state="error", status="Erreur", error=str(e))
+                    continue
+                reserved.add(out)
+                job = self._jobs.create(f["path"], out, snapshot, self._summary(snapshot, f["info"]))
+                f.update(job=job, state="queued", status="En file", progress=0.0, error="", output="")
+                self._compute_out(f)
+                added += 1
             if self._running:
+                if added:
+                    self._toast("info", f"{added} fichier(s) ajouté(s) à la file",
+                                "Ils seront traités avec les réglages actuels, figés dès maintenant.")
+                return bool(added)
+            if not self._pending_count():
                 return False
-            todo = [fid for fid in self._order
-                    if self._files[fid]["state"] in ("ready", "error", "cancelled")
-                    and self._files[fid].get("info")]
-            if not todo:
-                self._toast("info", "Rien à traiter", "Ajoutez une vidéo ou une image (ou retirez celles déjà terminées).")
+            self._launch_runner()
+        return True
+
+    def resume(self) -> bool:
+        """Reprend les traitements en pause / interrompus (sans ajouter de nouveaux fichiers)."""
+        with self._lock:
+            if self._running or not self._pending_count():
                 return False
-            self._running = True
-            self._task = "queue"
-            self._progress = None
-            for fid in todo:
-                self._files[fid].update(state="queued", status="En file", progress=0.0, error="")
-            settings = Settings.from_dict(self._settings.to_dict())
-        tools.keep_awake(True)
-        threading.Thread(target=self._run_queue, args=(todo, settings), daemon=True).start()
+            self._launch_runner()
+        return True
+
+    def pause(self) -> bool:
+        """Met en pause : l'avancement est enregistré sur le disque ; on peut alors quitter
+        l'application ou éteindre le PC, la reprise se fera à l'image près."""
+        with self._lock:
+            if not (self._running and self._task == "queue") or self._pause_req:
+                return False
+            self._pause_req = True
+            up = self._upscaler
+        if up:
+            up.pause()
+        self._log("⏸ Mise en pause demandée… (enregistrement de l'avancement)")
         return True
 
     def cancel(self) -> bool:
-        up = self._upscaler
-        if up and self._running:
+        with self._lock:
+            if self._running and self._task == "queue":
+                self._cancel_req = True
+                up = self._upscaler
+            elif not self._running and self._pending_count():
+                n = 0
+                for f in self._files.values():
+                    if f.get("job") and f["state"] in ("queued", "paused"):
+                        self._jobs.delete(f["job"])
+                        f.update(job=None, state="cancelled", status="Annulé", progress=0.0)
+                        self._compute_out(f)
+                        n += 1
+                self._progress = None
+                self._log(f"Traitement(s) en pause abandonné(s) : {n}")
+                self._toast("info", "Traitement abandonné", "L'avancement enregistré a été supprimé.")
+                return True
+            else:
+                return False
+        if up:
             up.cancel()
-            self._log("Annulation demandée…")
-            return True
-        return False
+        self._log("Annulation demandée…")
+        return True
 
     def preview(self, fid=None, index=None) -> bool:
         with self._lock:
@@ -520,6 +616,7 @@ class Api:
             updater.cleanup_old_versions()
         except Exception:
             pass
+        self._auto_resume()
         if self._settings.auto_update:
             time.sleep(4)
             self.check_update(manual=False)
@@ -539,48 +636,184 @@ class Api:
                                   "count": count, "name": f["name"] if f else ""}
         return cb
 
-    def _run_queue(self, todo: list, settings: Settings) -> None:
-        ok = failed = 0
-        t0 = time.monotonic()
-        cancelled = False
+    def _pending_count(self) -> int:
+        return sum(1 for f in self._files.values()
+                   if f.get("job") and f["state"] in ("queued", "paused", "running"))
+
+    def _summary(self, st: Settings, info) -> str:
+        """Résumé lisible des réglages figés, affiché sur la carte du fichier."""
+        parts = [MODEL_SHORT.get(st.model, (st.model,))[0]]
+        sizes = {"x1": "taille d'origine", "720p": "720p", "1080p": "1080p", "1440p": "1440p (2K)",
+                 "2160p": "4K", "4320p": "8K"}
+        parts.append(sizes.get(st.output_size, st.output_size))
+        if info is not None and info.is_image:
+            fmt = dict(IMAGE_FORMATS).get(st.image_format, st.image_format)
+            parts.append("format " + (fmt.lower() if st.image_format == "auto" else st.image_format.upper()))
+        else:
+            if st.interpolation in ("x2", "x3", "x4"):
+                parts.append(f"fluidité {st.interpolation}")
+            enc = engine.ENCODERS_BY_KEY.get(st.encoder)
+            codec = "H.265" if enc and enc.codec == "hevc" else "H.264"
+            parts.append(f"{codec} {st.container.upper()} · CRF {st.quality}")
+        return " · ".join(parts)
+
+    def _restore_jobs(self) -> None:
+        """Recharge les traitements en pause ou interrompus (fermeture, plantage, arrêt du PC)."""
         try:
-            for i, fid in enumerate(todo, 1):
-                f = self._files.get(fid)
-                if not f:
-                    continue
-                if cancelled:
-                    f.update(state="ready", status="Prêt")
-                    continue
-                f.update(state="running", status="Démarrage…")
-                self._log(f"──── [{i}/{len(todo)}] {f['name']}")
-                self._upscaler = Upscaler(on_log=self._log, on_progress=self._on_progress(fid, i, len(todo)))
+            pending = self._jobs.load_pending()
+        except Exception as e:  # noqa: BLE001
+            self._log(f"Reprise impossible : {e}")
+            return
+        for job in pending:
+            fid = self._next_id
+            self._next_id += 1
+            try:
+                size = os.path.getsize(job.path)
+            except OSError:
+                size = 0
+            prog = float(job.data.get("progress") or 0.0)
+            f = {"id": fid, "name": os.path.basename(job.path), "path": job.path,
+                 "status": f"En pause · {prog * 100:.0f} %" if prog else "En file (en pause)",
+                 "state": "paused", "progress": prog, "res": "", "dur": "", "out": "", "size": size,
+                 "output": "", "error": "", "thumb": "", "info": None,
+                 "kind": "image" if job.path.lower().endswith(IMAGE_EXT) else "video", "fps": 0,
+                 "job": job}
+            if job.status == "running":
+                self._jobs.update(job, status="paused")
+            self._files[fid] = f
+            self._order.append(fid)
+            self._restored += 1
+            threading.Thread(target=self._probe, args=(fid,), daemon=True).start()
+        if pending:
+            self._log(f"{len(pending)} traitement(s) en pause retrouvé(s) : reprise automatique.")
+
+    def _auto_resume(self) -> None:
+        if not self._restored:
+            return
+        deadline = time.monotonic() + 15  # laisse l'analyse des fichiers se terminer
+        while time.monotonic() < deadline and any(
+                f["state"] == "probing" or (f.get("job") and not f.get("info"))
+                for f in list(self._files.values()) if f.get("job")):
+            time.sleep(0.2)
+        time.sleep(1.0)
+        with self._lock:
+            if self._running or not self._pending_count():
+                return
+            n = self._pending_count()
+            self._launch_runner()
+        self._toast("info", "Reprise automatique",
+                    f"{n} traitement(s) reprennent exactement là où ils s'étaient arrêtés.")
+
+    def _launch_runner(self) -> None:
+        """À appeler sous self._lock."""
+        self._running = True
+        self._task = "queue"
+        self._progress = None
+        self._pause_req = False
+        self._cancel_req = False
+        for f in self._files.values():
+            if f.get("job") and f["state"] == "paused":
+                f.update(state="queued", status="En file")
+        tools.keep_awake(True)
+        threading.Thread(target=self._run_jobs, daemon=True).start()
+
+    def _run_jobs(self) -> None:
+        ok = failed = handled = 0
+        t0 = time.monotonic()
+        cancelled = paused = False
+        try:
+            while True:
+                with self._lock:
+                    if self._cancel_req:
+                        cancelled = True
+                        break
+                    if self._pause_req:
+                        paused = True
+                        break
+                    todo = [fid for fid in self._order
+                            if self._files[fid].get("job") and self._files[fid]["state"] == "queued"]
+                    if not todo:
+                        break
+                    fid = todo[0]
+                    f = self._files[fid]
+                    job = f["job"]
+                    handled += 1
+                    index, count = handled, handled - 1 + len(todo)
+                    resuming = bool((job.data.get("state") or {}).get("src_done"))
+                    f.update(state="running", status="Reprise…" if resuming else "Démarrage…", error="")
+                    self._jobs.update(job, status="running")
+                    up = Upscaler(on_log=self._log, on_progress=self._on_progress(fid, index, count))
+                    self._upscaler = up
+                self._log(f"──── [{index}/{count}] {f['name']}")
+                self._log("Réglages figés : " + job.data.get("summary", ""))
+                if resuming:
+                    self._log(f"↻ Reprise à l'image {job.data['state']['src_done']} (avancement enregistré).")
+
+                def on_state(st, job=job, f=f):
+                    self._jobs.update(job, state=copy.deepcopy(st), progress=f.get("progress", 0.0))
+
                 try:
-                    out = self._upscaler.process(f["path"], settings)
+                    out = up.process(job.path, job.settings, job.output, job_dir=job.work,
+                                     state=copy.deepcopy(job.data.get("state") or {}), on_state=on_state)
                     ok += 1
-                    f.update(state="done", status="Terminé", progress=1.0, output=out)
+                    with self._lock:
+                        f.update(state="done", status="Terminé", progress=1.0, output=out, job=None)
+                        self._jobs.delete(job)
                     self._last_output_dir = os.path.dirname(out)
                     self._log(f"✔ Terminé : {out}")
+                except engine.Paused:
+                    paused = True
+                    with self._lock:
+                        pct = f.get("progress", 0.0) * 100
+                        f.update(state="paused", status=f"En pause · {pct:.0f} %")
+                        self._jobs.update(job, status="paused", progress=f.get("progress", 0.0))
+                    self._log("⏸ En pause. Vous pouvez fermer l'application ou éteindre le PC : "
+                              "le traitement reprendra automatiquement à la même image.")
+                    break
                 except Cancelled:
                     cancelled = True
-                    f.update(state="cancelled", status="Annulé", progress=0.0)
+                    with self._lock:
+                        f.update(state="cancelled", status="Annulé", progress=0.0, job=None)
+                        self._jobs.delete(job)
+                        self._compute_out(f)
                     self._log("Traitement annulé.")
-                except UpscaleError as e:
-                    failed += 1
-                    f.update(state="error", status="Erreur", error=str(e))
-                    self._log(f"✖ {f['name']} : {e}")
                 except Exception as e:  # noqa: BLE001
                     failed += 1
-                    f.update(state="error", status="Erreur", error=str(e))
-                    self._log(f"✖ Erreur inattendue : {e}\n{traceback.format_exc()}")
+                    with self._lock:
+                        f.update(state="error", status="Erreur", error=str(e), job=None)
+                        self._jobs.delete(job)
+                        self._compute_out(f)
+                    if isinstance(e, UpscaleError):
+                        self._log(f"✖ {f['name']} : {e}")
+                    else:
+                        self._log(f"✖ Erreur inattendue : {e}\n{traceback.format_exc()}")
+            with self._lock:
+                for f in self._files.values():
+                    if f.get("job") and f["state"] == "queued":
+                        if cancelled:  # « Arrêter » vide aussi la file
+                            self._jobs.delete(f["job"])
+                            f.update(job=None, state="ready", status="Prêt", progress=0.0)
+                            self._compute_out(f)
+                        elif paused:
+                            f.update(state="paused", status="En file (en pause)")
+                            self._jobs.update(f["job"], status="paused")
         finally:
             with self._lock:
                 self._running = False
                 self._task = ""
                 self._upscaler = None
+                self._pause_req = self._cancel_req = False
+                if paused and self._progress:
+                    self._progress = dict(self._progress, paused=True)
             tools.keep_awake(False)
             elapsed = fmt_time(time.monotonic() - t0)
-            self._emit(type="queue_done", ok=ok, failed=failed, cancelled=cancelled, elapsed=elapsed)
-            if cancelled:
+            self._emit(type="queue_done", ok=ok, failed=failed, cancelled=cancelled, paused=paused,
+                       elapsed=elapsed)
+            if paused:
+                self._toast("info", "Traitement en pause",
+                            "Avancement enregistré : vous pouvez quitter ou éteindre le PC, "
+                            "la reprise se fera automatiquement à la même image.")
+            elif cancelled:
                 self._toast("info", "Traitement annulé")
             elif failed:
                 self._toast("error", f"{failed} fichier(s) en erreur",
@@ -588,6 +821,27 @@ class Api:
             elif ok:
                 self._toast("success", f"{ok} fichier(s) terminé(s) en {elapsed}",
                             "Vos fichiers améliorés sont prêts.")
+
+    def _on_closing(self):
+        """Fermeture de la fenêtre pendant un traitement : mise en pause propre d'abord."""
+        if self._closing_ok or not (self._running and self._task == "queue"):
+            if self._running and self._upscaler:
+                self._upscaler.cancel()  # aperçu en cours
+            return None
+        self._emit(type="closing")
+        threading.Thread(target=self._pause_then_close, daemon=True).start()
+        return False  # annule la fermeture pour l'instant
+
+    def _pause_then_close(self) -> None:
+        self.pause()
+        deadline = time.monotonic() + 60
+        while self._running and time.monotonic() < deadline:
+            time.sleep(0.1)
+        self._closing_ok = True
+        try:
+            self._window.destroy()
+        except Exception:  # noqa: BLE001
+            os._exit(0)
 
     def _run_preview(self, fid: int, settings: Settings, index=None) -> None:
         f = self._files.get(fid)
@@ -622,6 +876,17 @@ class Api:
                 self._running = False
                 self._task = ""
                 self._upscaler = None
+
+
+def _unique_path(path: str, taken: set) -> str:
+    """Évite que deux traitements en file visent le même fichier de sortie."""
+    if path not in taken:
+        return path
+    base, ext = os.path.splitext(path)
+    n = 2
+    while f"{base} ({n}){ext}" in taken or os.path.exists(f"{base} ({n}){ext}"):
+        n += 1
+    return f"{base} ({n}){ext}"
 
 
 def _on_drop(api: Api):
@@ -695,6 +960,7 @@ def run(selftest_report: str | None = None) -> int:
             window.destroy()
 
     window.events.shown += lambda: _force_dark_titlebar(window)
+    window.events.closing += api._on_closing
     kwargs = {}
     if tools.IS_WIN:
         kwargs["gui"] = "edgechromium"

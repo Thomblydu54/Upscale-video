@@ -50,6 +50,15 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    - cliquez enfin sur **Améliorer cette image avec l'IA**. Le comparateur avant / après s'ouvre, et « Changer d'image » permet d'en essayer une autre.
 5. Cliquez sur **Lancer l'upscale**. La vidéo finale est enregistrée à côté de l'originale, sous le nom `nom_upscaled_3840x2160.mp4`.
 
+### Pause et reprise, même après un arrêt du PC
+- Pendant un traitement, le bouton **Pause** enregistre l'avancement sur le disque. Vous pouvez ensuite **fermer l'application ou éteindre le PC**.
+- Au prochain lancement, le traitement **reprend automatiquement à l'image exacte** où il s'était arrêté. Aucune image n'est perdue ni doublée, et le son reste synchronisé.
+- Si vous fermez la fenêtre pendant un traitement, l'application le met d'abord en pause toute seule. Même en cas de coupure de courant ou de plantage, la reprise repart du dernier morceau enregistré (quelques secondes de vidéo au plus).
+- **Les réglages sont figés au moment du clic** : chaque fichier lancé garde le modèle, la résolution, la fluidité et l'encodage choisis à cet instant. Ils sont rappelés sur sa carte (🔒). Changer les réglages ensuite, même après un redémarrage, ne modifie jamais un traitement en cours, en file ou en pause.
+- Pendant un traitement, vous pouvez ajouter d'autres fichiers avec d'autres réglages : **Ajouter à la file**. Ils utiliseront les réglages du moment.
+- **Abandonner** supprime l'avancement enregistré des traitements en pause.
+- L'avancement est conservé dans `%LOCALAPPDATA%\UpscaleVideoAI\jobs`, ou dans le *dossier temporaire* choisi dans les réglages avancés. Il est supprimé automatiquement à la fin.
+
 ### Ce que l'application gère toute seule
 - La **piste audio** est conservée telle quelle (ou convertie en AAC si le format MP4 ne l'accepte pas). Toutes les pistes audio sont gardées.
 - Les **sous-titres** sont conservés : tous en MKV, les sous-titres texte en MP4.
@@ -57,7 +66,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 - **Désentrelacement** automatique (DVD, vidéos TV)
 - Gestion des **pixels non carrés** (DVD 4:3 / 16:9) et des vidéos tournées (smartphone)
 - **Couleurs** correctes : conversion BT.601/BT.709
-- **Espace disque limité** : les images sont traitées par lots, puis supprimées au fur et à mesure.
+- **Espace disque limité** : les images sont traitées par lots, puis supprimées au fur et à mesure. La vidéo est encodée par morceaux, assemblés à la fin sans réencodage.
 - Le PC ne se met pas en veille pendant un traitement.
 - Encodage **H.264 ou H.265** : sur le processeur (CPU), ou accéléré par la carte graphique (NVIDIA NVENC, AMD AMF, Intel QSV).
 
@@ -76,7 +85,9 @@ Au démarrage, l'application vérifie si une nouvelle version est disponible sur
 ## Comment ça marche
 
 ```
-vidéo ──ffmpeg──▶ images PNG ──Real-ESRGAN (GPU/Vulkan)──▶ images x2/x4 ──ffmpeg──▶ vidéo + audio d'origine
+vidéo ──ffmpeg──▶ images PNG ──[RIFE]──Real-ESRGAN (GPU/Vulkan)──▶ images x2/x4 ──ffmpeg──▶ morceaux encodés
+                                                                         │ (avancement enregistré après chaque morceau)
+                                    assemblage sans réencodage + audio, sous-titres, chapitres d'origine ◀──┘
 ```
 
 - **Interpolation** : [RIFE ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan), modèle RIFE v4.6.

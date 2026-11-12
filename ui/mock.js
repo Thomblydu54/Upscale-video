@@ -40,7 +40,7 @@
     const ev = (x) => Math.max(2, Math.round(x / 2) * 2);
     return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${f.fps * m} i/s` : '');
   }
-  function pub(f) { return { ...f, out: outFor(f) }; }
+  function pub(f) { return { frozen: '', resumable: false, ...f, out: f.frozenOut || outFor(f) }; }
 
   function addSample(s) {
     const f = { id: nextId++, name: s.name, path: 'C:\\Users\\Vous\\Vidéos\\' + s.name, status: 'Prêt', state: 'ready', progress: 0,
@@ -107,7 +107,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.4.0', tag: 'v1.4.0', current: '1.3.0', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.5.0', tag: 'v1.5.0', current: '1.4.0', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -116,7 +116,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.4.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.5.0' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -127,7 +127,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.3.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.4.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
@@ -138,7 +138,8 @@
     async poll() {
       const ev = events; events = [];
       const lg = logs; logs = [];
-      return { events: ev, logs: lg, files: files.map(pub), running, task, progress };
+      const pending = files.filter((f) => f.frozen && ['queued', 'paused', 'running'].includes(f.state)).length;
+      return { events: ev, logs: lg, files: files.map(pub), running, task, progress, pending, pausing: false };
     },
     async pick_files() { return [addSample(SAMPLES[(nextId - 1) % SAMPLES.length])]; },
     async add_paths(names) { return names.map((n, i) => addSample({ ...SAMPLES[i % 3], name: n })); },
@@ -149,7 +150,26 @@
     async open_output() { events.push({ type: 'toast', kind: 'info', title: 'Mode démo', text: "Dans l'application, le dossier s'ouvre dans l'Explorateur." }); return true; },
     async play() { events.push({ type: 'toast', kind: 'info', title: 'Mode démo', text: "Dans l'application, la vidéo s'ouvre dans votre lecteur." }); return true; },
     async open_url() {},
-    async cancel() { if (timer) { clearInterval(timer); timer = null; } files.forEach((f) => { if (f.state === 'running' || f.state === 'queued') Object.assign(f, { state: 'cancelled', status: 'Annulé', progress: 0 }); }); running = false; task = ''; events.push({ type: 'toast', kind: 'info', title: 'Traitement annulé' }); return true; },
+    async cancel() {
+      if (timer) { clearInterval(timer); timer = null; }
+      files.forEach((f) => { if (['running', 'queued', 'paused'].includes(f.state)) Object.assign(f, { state: 'cancelled', status: 'Annulé', progress: 0, frozen: '', frozenOut: '', resumable: false }); });
+      running = false; task = ''; progress = null;
+      events.push({ type: 'toast', kind: 'info', title: 'Traitement annulé' }); return true;
+    },
+    async pause() {
+      if (!running || task !== 'queue') return false;
+      clearInterval(timer); timer = null; running = false; task = '';
+      files.forEach((f) => {
+        if (f.state === 'running') Object.assign(f, { state: 'paused', status: `En pause · ${Math.round(f.progress * 100)} %`, resumable: true });
+        else if (f.state === 'queued') Object.assign(f, { state: 'paused', status: 'En file (en pause)' });
+      });
+      if (progress) progress = { ...progress, paused: true };
+      log('⏸ En pause. Vous pouvez fermer l\'application ou éteindre le PC : le traitement reprendra automatiquement à la même image.');
+      events.push({ type: 'queue_done', ok: 0, failed: 0, cancelled: false, paused: true });
+      events.push({ type: 'toast', kind: 'info', title: 'Traitement en pause', text: 'Avancement enregistré : vous pouvez quitter ou éteindre le PC, la reprise se fera automatiquement à la même image.' });
+      return true;
+    },
+    async resume() { return this.start(); },
     async preview(id, index) {
       const f = files.find((x) => x.id === id) || files[0];
       if (!f) { events.push({ type: 'toast', kind: 'info', title: 'Aucune vidéo', text: 'Ajoutez une vidéo pour générer un aperçu.' }); return false; }
@@ -165,30 +185,45 @@
       return true;
     },
     async start() {
-      const todo = files.filter((f) => ['ready', 'error', 'cancelled'].includes(f.state));
-      if (!todo.length) { events.push({ type: 'toast', kind: 'info', title: 'Rien à traiter', text: 'Ajoutez une vidéo.' }); return false; }
-      todo.forEach((f) => Object.assign(f, { state: 'queued', status: 'En file', progress: 0 }));
+      const short = { 'upscayl-lite-4x': 'Réaliste Rapide', 'upscayl-standard-4x': 'Réaliste Pro', 'realesrgan-x4plus': 'Real-ESRGAN', 'realesr-animevideov3': 'Anime Rapide', 'realesrgan-x4plus-anime': 'Anime Pro' };
+      const summary = (f) => [short[settings.model] || settings.model, (SIZES.find((x) => x[0] === settings.output_size) || [0, settings.output_size])[1],
+        ...(f.kind === 'image' ? [`format ${settings.image_format === 'auto' ? 'identique' : settings.image_format.toUpperCase()}`]
+          : [...(settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`])].join(' · ');
+      const fresh = files.filter((f) => ['ready', 'error', 'cancelled'].includes(f.state) && !f.frozen);
+      fresh.forEach((f) => Object.assign(f, { state: 'queued', status: 'En file', progress: 0, frozen: summary(f), frozenOut: outFor(f) }));
+      if (running) {
+        if (fresh.length) events.push({ type: 'toast', kind: 'info', title: `${fresh.length} fichier(s) ajouté(s) à la file`, text: 'Ils seront traités avec les réglages actuels, figés dès maintenant.' });
+        return fresh.length > 0;
+      }
+      files.forEach((f) => { if (f.state === 'paused') Object.assign(f, { state: 'queued', status: 'En file' }); });
+      if (!files.some((f) => f.state === 'queued')) { events.push({ type: 'toast', kind: 'info', title: 'Rien à traiter', text: 'Ajoutez une vidéo.' }); return false; }
       running = true; task = 'queue';
-      let i = 0, done = 0; const total = 900; const t0 = Date.now();
-      log(`──── [1/${todo.length}] ${todo[0].name}`);
+      const total = 900; const t0 = Date.now(); let ok = 0, handled = 0, cur = null;
       timer = setInterval(() => {
-        const f = todo[i];
+        if (!cur) {
+          cur = files.find((f) => f.state === 'queued');
+          if (!cur) {
+            clearInterval(timer); timer = null; running = false; task = '';
+            events.push({ type: 'queue_done', ok, failed: 0, cancelled: false });
+            events.push({ type: 'toast', kind: 'success', title: `${ok} fichier(s) terminé(s)`, text: 'Vos fichiers améliorés sont prêts.' });
+            return;
+          }
+          handled++;
+          log(`──── [${handled}/${handled - 1 + files.filter((f) => f.state === 'queued').length}] ${cur.name}`);
+          log('Réglages figés : ' + cur.frozen);
+          if (cur.progress > 0) log(`↻ Reprise à l'image ${Math.round(cur.progress * total)} (avancement enregistré).`);
+        }
+        const f = cur;
         f.state = 'running';
-        done += 9 + Math.random() * 6;
-        const frac = Math.min(1, done / total);
+        const frac = Math.min(1, (f.progress || 0) + (9 + Math.random() * 6) / total);
         f.progress = frac; f.status = Math.round(frac * 100) + ' %';
         const el = (Date.now() - t0) / 1000;
         const fmt = (s) => new Date(Math.max(0, s) * 1000).toISOString().slice(11, 19);
-        progress = { done: Math.round(frac * total), total, speed: (11.8 + Math.random()).toFixed(2), eta: fmt((total - done) / 12), elapsed: fmt(el), fraction: frac, stage: frac < 1 ? 'IA' : 'Finalisation', index: i + 1, count: todo.length, name: f.name };
+        progress = { done: Math.round(frac * total), total, speed: (11.8 + Math.random()).toFixed(2), eta: fmt((1 - frac) * total / 12), elapsed: fmt(el), fraction: frac, stage: frac < 1 ? 'IA' : 'Finalisation', index: handled, count: handled - 1 + files.filter((x) => x.state === 'queued' || x === f).length, name: f.name };
         if (frac >= 1) {
-          Object.assign(f, { state: 'done', status: 'Terminé', output: 'C:\\out.mp4' });
+          Object.assign(f, { state: 'done', status: 'Terminé', output: 'C:\\out.mp4', frozen: '', resumable: false });
           log(`✔ Terminé : ${f.name}`);
-          i++; done = 0;
-          if (i >= todo.length) {
-            clearInterval(timer); timer = null; running = false; task = '';
-            events.push({ type: 'queue_done', ok: todo.length, failed: 0, cancelled: false });
-            events.push({ type: 'toast', kind: 'success', title: `${todo.length} vidéo(s) terminée(s)`, text: 'Vos vidéos en haute résolution sont prêtes.' });
-          } else log(`──── [${i + 1}/${todo.length}] ${todo[i].name}`);
+          ok++; cur = null;
         }
       }, 120);
       return true;

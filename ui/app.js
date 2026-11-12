@@ -17,7 +17,7 @@ const SIZE_MAIN = { x2: '×2', x3: '×3', x4: '×4', '720p': '720p', '1080p': '1
 const SIZE_SUB = { x2: 'double', x3: 'triple', x4: 'quadruple', '720p': 'HD', '1080p': 'Full HD', '1440p': '2K', '2160p': 'Ultra HD', '4320p': 'extrême', x1: 'sans agrandissement · fluidité seule' };
 
 let API = null;
-const S = { settings: {}, models: [], files: [], thumbs: new Map(), running: false, task: '', demo: false };
+const S = { settings: {}, models: [], files: [], thumbs: new Map(), running: false, task: '', demo: false, pending: 0, pausing: false };
 const cardEls = new Map();
 
 /* ------------------------------------------------------------------ démarrage */
@@ -179,7 +179,12 @@ function bindUi() {
   $('#dropzone').addEventListener('click', pickFiles);
   $('#clearBtn').addEventListener('click', async () => { await API.clear_files(); });
   $('#startBtn').addEventListener('click', () => API.start());
-  $('#cancelBtn').addEventListener('click', () => API.cancel());
+  $('#pauseBtn').addEventListener('click', () => API.pause());
+  $('#cancelBtn').addEventListener('click', () => {
+    if (!S.running && S.pending > 0
+      && !confirm('Abandonner les traitements en pause ?\nL\'avancement enregistré sera supprimé.')) return;
+    API.cancel();
+  });
   $('#previewBtn').addEventListener('click', () => {
     const f = S.files.find((x) => x.state !== 'probing' && x.state !== 'error' && x.res) || S.files.find((x) => x.res);
     if (!f) { toast('info', 'Aucun fichier', 'Ajoutez une vidéo ou une image pour générer un aperçu.'); return; }
@@ -307,7 +312,8 @@ function handleEvent(ev) {
     case 'toast': toast(ev.kind, ev.title, ev.text); break;
     case 'gpus': setGpus(ev.gpus); break;
     case 'thumb': if (ev.thumb) { S.thumbs.set(ev.id, ev.thumb); const el = cardEls.get(ev.id); if (el) setThumb(el, ev.thumb); } break;
-    case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled) confetti(); break;
+    case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled && !ev.paused) confetti(); break;
+    case 'closing': toast('info', 'Mise en pause avant fermeture…', 'L\'avancement est enregistré ; le traitement reprendra automatiquement au prochain lancement.'); break;
     case 'preview_started': onPreviewStarted(ev); break;
     case 'update': showUpdate(ev); break;
     case 'update_progress': {
@@ -371,12 +377,14 @@ function createCard(f) {
       <div class="overlay">
         <div class="ring"><svg viewBox="0 0 74 74"><circle class="track" cx="37" cy="37" r="32"/><circle class="val" cx="37" cy="37" r="32"/></svg><span>0%</span></div>
         <div class="queued-ic">En file d'attente</div>
+        <div class="paused-ic"><svg viewBox="0 0 24 24"><rect x="6" y="5" width="4" height="14" rx="1"/><rect x="14" y="5" width="4" height="14" rx="1"/></svg>En pause</div>
         <div class="done-ic"><svg viewBox="0 0 24 24"><path d="M5 13l4 4L19 7"/></svg></div>
       </div>
     </div>
     <div class="card-body">
       <div class="card-name"></div>
       <div class="card-meta"><span class="pill"></span><span class="size"></span></div>
+      <div class="card-frozen" hidden title="Réglages figés au moment du lancement : ils ne changeront plus pour ce fichier, même si vous modifiez les réglages ou redémarrez l'application."><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg><span></span></div>
       <div class="card-actions">
         <button class="btn soft play"><svg class="ic" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>Lire</button>
         <button class="btn soft folder"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>Dossier</button>
@@ -384,7 +392,13 @@ function createCard(f) {
     </div>`;
   const img = $('img', el);
   img.addEventListener('load', () => { img.classList.add('loaded'); $('.shimmer', el)?.remove(); });
-  $('.card-x', el).addEventListener('click', async (e) => { e.stopPropagation(); await API.remove_file(f.id); });
+  $('.card-x', el).addEventListener('click', async (e) => {
+    e.stopPropagation();
+    const cur = S.files.find((x) => x.id === f.id);
+    if (cur && cur.state === 'paused' && cur.resumable
+      && !confirm(`Retirer « ${cur.name} » ?\nL'avancement enregistré de ce traitement en pause sera perdu.`)) return;
+    await API.remove_file(f.id);
+  });
   $('.card-eye', el).addEventListener('click', (e) => { e.stopPropagation(); if (!S.running) openPicker(f.id); });
   $('.play', el).addEventListener('click', () => API.play(f.id));
   $('.folder', el).addEventListener('click', () => API.open_output(f.id));
@@ -421,7 +435,10 @@ function updateCard(el, f) {
   const pct = Math.round((f.progress || 0) * 100);
   $('.ring span', el).textContent = pct + '%';
   $('.ring .val', el).style.strokeDashoffset = 201 - 201 * (f.progress || 0);
-  $('.card-progress div', el).style.width = (f.state === 'running' ? pct : 0) + '%';
+  $('.card-progress div', el).style.width = (f.state === 'running' || f.state === 'paused' ? pct : 0) + '%';
+  const frozen = $('.card-frozen', el);
+  frozen.hidden = !f.frozen;
+  $('span', frozen).textContent = f.frozen || '';
 }
 
 function syncFiles(list) {
@@ -453,37 +470,56 @@ function syncFiles(list) {
 function syncRun(r) {
   S.running = r.running;
   S.task = r.task;
+  S.pending = r.pending || 0;
+  S.pausing = !!r.pausing;
+  const queue = r.running && r.task === 'queue';
+  const pausedQ = !r.running && S.pending > 0;
+  const newFiles = S.files.filter((f) => ['ready', 'error', 'cancelled'].includes(f.state) && f.res && !f.frozen).length;
   const start = $('#startBtn');
-  start.disabled = r.running;
-  $('span', start).textContent = r.running && r.task === 'queue' ? 'Traitement en cours…' : "Lancer l'upscale";
-  $('#cancelBtn').hidden = !(r.running && r.task === 'queue');
+  start.disabled = (r.running && r.task !== 'queue') || (queue && (!newFiles || S.pausing));
+  $('span', start).textContent = queue ? (newFiles ? 'Ajouter à la file' : 'Traitement en cours…')
+    : pausedQ ? (newFiles ? 'Reprendre + nouveaux' : 'Reprendre') : "Lancer l'upscale";
+  start.title = queue && newFiles ? 'Ajoute les nouveaux fichiers à la file, avec les réglages actuels (figés dès le clic)' : '';
+  const pause = $('#pauseBtn');
+  pause.hidden = !queue;
+  pause.disabled = S.pausing;
+  $('span', pause).textContent = S.pausing ? 'Mise en pause…' : 'Pause';
+  const cancel = $('#cancelBtn');
+  cancel.hidden = !(queue || pausedQ);
+  $('span', cancel).textContent = pausedQ ? 'Abandonner' : 'Arrêter';
   $('#previewBtn').disabled = r.running;
   $('#clearBtn').disabled = r.running;
   const bar = $('.bar');
   const p = r.progress;
   bar.classList.toggle('indeterminate', r.running && r.task === 'preview');
-  bar.classList.toggle('active', r.running && r.task === 'queue');
+  bar.classList.toggle('active', queue && !S.pausing);
+  bar.classList.toggle('paused', pausedQ || S.pausing);
 
   if (r.running && r.task === 'preview') {
     $('#taskTitle').textContent = 'Génération de l\'aperçu IA…';
     return;
   }
-  if (p) {
+  const pausedTitle = `En pause · ${S.pending} fichier${S.pending > 1 ? 's' : ''} en attente — vous pouvez fermer l'application ou éteindre le PC, la reprise se fera à l'image près`;
+  if (p && (r.running || p.paused || !pausedQ)) {
     const frac = p.fraction || 0;
     setRing(frac);
     $('#barFill').style.width = (frac * 100).toFixed(1) + '%';
-    $('#taskTitle').textContent = r.running
-      ? `${p.count > 1 ? `[${p.index}/${p.count}] ` : ''}${p.name} · ${p.stage === 'Finalisation' ? 'finalisation…' : 'amélioration par l\'IA'}`
-      : 'Traitement terminé';
-    $('#stSpeed').textContent = p.speed ? `${p.speed} img/s` : '—';
+    $('#taskTitle').textContent = S.pausing ? 'Mise en pause… enregistrement de l\'avancement'
+      : r.running
+        ? `${p.count > 1 ? `[${p.index}/${p.count}] ` : ''}${p.name} · ${p.stage === 'Finalisation' ? 'finalisation…' : 'amélioration par l\'IA'}`
+        : pausedQ ? pausedTitle : 'Traitement terminé';
+    $('#stSpeed').textContent = r.running && p.speed ? `${p.speed} img/s` : '—';
     $('#stElapsed').textContent = p.elapsed || '—';
-    $('#stEta').textContent = r.running ? (p.eta || '—') : '00:00:00';
+    $('#stEta').textContent = r.running ? (p.eta || '—') : pausedQ ? '—' : '00:00:00';
     $('#stFrames').textContent = `${p.done} / ${p.total}`;
   } else if (!r.running) {
-    setRing(0);
-    $('#barFill').style.width = '0%';
+    const paused = S.files.find((f) => f.state === 'paused' && f.progress > 0);
+    const frac = pausedQ && paused ? paused.progress : 0;
+    setRing(frac);
+    $('#barFill').style.width = (frac * 100).toFixed(1) + '%';
     const ready = S.files.filter((f) => f.state === 'ready').length;
-    $('#taskTitle').textContent = ready ? `${ready} fichier${ready > 1 ? 's' : ''} prêt${ready > 1 ? 's' : ''} à traiter` : 'Prêt à améliorer vos vidéos et images';
+    $('#taskTitle').textContent = pausedQ ? pausedTitle
+      : ready ? `${ready} fichier${ready > 1 ? 's' : ''} prêt${ready > 1 ? 's' : ''} à traiter` : 'Prêt à améliorer vos vidéos et images';
   }
 }
 

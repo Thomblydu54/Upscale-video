@@ -147,6 +147,73 @@ def selftest(report_path: str) -> int:
 
     check("interpolation RIFE (processeur)", rife_cpu_pipeline)
 
+    # --- pause puis reprise (état persistant, réglages figés) avec le vrai RIFE sur le processeur
+    def pause_resume():
+        from upscaler import jobs as jobs_mod
+        tmp = tempfile.mkdtemp(prefix="upv_pause_")
+        os.environ["UPSCALER_DATA_DIR"] = os.path.join(tmp, "data")
+        clip = os.path.join(tmp, "clip.mp4")
+        ff = tools.find_tool("ffmpeg")
+        tools.run([ff, "-hide_banner", "-loglevel", "error", "-y",
+                   "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=10:duration=3",
+                   "-f", "lavfi", "-i", "sine=frequency=440:duration=3",
+                   "-pix_fmt", "yuv420p", "-c:a", "aac", "-shortest", clip], check=True,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        orig_plan, orig_seg = engine.make_plan, engine.SEG_MAX_FRAMES
+
+        def small_batches(info, st):
+            plan = orig_plan(info, st)
+            plan.batch_size = 5
+            return plan
+
+        engine.make_plan, engine.SEG_MAX_FRAMES = small_batches, 10
+        store = jobs_mod.JobStore()
+        st = engine.Settings(output_size="x1", interpolation="x2", gpu="-1")
+        info = engine.probe(clip)
+        out = engine.default_output_path(info, st, engine.make_plan(info, st))
+        job = store.create(clip, out, st, "test")
+        try:
+            up = engine.Upscaler()
+
+            def on_state(state):  # pause dès le premier morceau enregistré
+                store.update(job, state=dict(state))
+                if state.get("src_done"):
+                    up.pause()
+
+            try:
+                up.process(job.path, job.settings, job.output, job_dir=job.work,
+                           state=dict(job.data["state"]), on_state=on_state)
+                raise RuntimeError("la pause n'a pas interrompu le traitement")
+            except engine.Paused:
+                pass
+            store.update(job, status="paused")
+            job2 = store.load_pending()[0]
+            done = job2.data["state"]["src_done"]
+            if not 0 < done < 30:
+                raise RuntimeError(f"avancement enregistré inattendu : {done}")
+            res = engine.Upscaler().process(job2.path, job2.settings, job2.output,
+                                            job_dir=job2.work, state=dict(job2.data["state"]),
+                                            on_state=lambda s2: store.update(job2, state=dict(s2)))
+            store.delete(job2)
+        except engine.UpscaleError as e:
+            if "RIFE" in str(e):
+                lines.append(f"INFO pause/reprise: RIFE indisponible ici ({str(e)[:200]!r})")
+                return "ignoré"
+            raise
+        finally:
+            engine.make_plan, engine.SEG_MAX_FRAMES = orig_plan, orig_seg
+            os.environ.pop("UPSCALER_DATA_DIR", None)
+        r = tools.run([tools.find_tool("ffprobe"), "-v", "error", "-count_frames", "-show_entries",
+                       "stream=codec_type,nb_read_frames,r_frame_rate", "-of", "csv=p=0", res],
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        streams = r.stdout.decode().split()
+        video = [x for x in streams if x.startswith("video")]
+        if not video or video[0].split(",")[1:3] != ["20/1", "60"] or not any(x.startswith("audio") for x in streams):
+            raise RuntimeError(f"résultat inattendu après reprise : {streams}")
+        return f"pause après {done} images source, reprise → {video[0]} + audio"
+
+    check("pause et reprise", pause_resume)
+
     def frame_grab():
         tmp = tempfile.mkdtemp(prefix="upv_selftest_")
         clip = os.path.join(tmp, "clip.mp4")

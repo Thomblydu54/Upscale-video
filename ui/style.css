@@ -198,7 +198,7 @@ button { font: inherit; color: inherit; }
 .thumb img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .5s, transform .6s, filter .4s; }
 .thumb img.loaded { opacity: 1; }
 .card:hover .thumb img { transform: scale(1.05); }
-.card.running .thumb img, .card.queued .thumb img { filter: brightness(.55) saturate(.8); }
+.card.running .thumb img, .card.queued .thumb img, .card.paused .thumb img { filter: brightness(.55) saturate(.8); }
 .thumb::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, transparent 50%, rgba(0,0,0,.65)); pointer-events: none; }
 .shimmer { position: absolute; inset: 0; background: linear-gradient(100deg, transparent 20%, rgba(255,255,255,.06) 50%, transparent 80%) #11111f; background-size: 200% 100%; animation: shimmer 1.4s infinite; }
 @keyframes shimmer { to { background-position: -200% 0; } }
@@ -488,7 +488,7 @@ input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139,9
 .card-eye svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; }
 .card:hover .card-eye { opacity: 1; }
 .card-eye:hover { background: rgba(139,92,246,.55); }
-.card.running .card-eye, .card.queued .card-eye, .card.probing .card-eye, .card.error .card-eye { display: none; }
+.card.running .card-eye, .card.queued .card-eye, .card.paused .card-eye, .card.probing .card-eye, .card.error .card-eye { display: none; }
 
 /* Comparateur avant / après */
 .compare { position: relative; flex: 1; overflow: hidden; background:
@@ -559,3 +559,21 @@ input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139,9
 .kind-badge.img { color: #a5f3fc; }
 .kind-badge.fps { color: #fde68a; }
 .card .kind-badge.fps { left: auto; right: 44px; }
+
+/* ---- pause / reprise ---- */
+.paused-ic { display: none; align-items: center; gap: 6px; font-size: 12px; font-weight: 600; padding: 6px 12px; border-radius: 99px;
+  color: var(--amber); background: rgba(10,10,20,.72); border: 1px solid rgba(251,191,36,.45); box-shadow: 0 0 24px -6px rgba(251,191,36,.5); }
+.paused-ic svg { width: 14px; height: 14px; fill: var(--amber); }
+.card.paused .paused-ic { display: flex; }
+.card.paused .overlay { display: flex; flex-direction: column; justify-content: center; align-items: center; gap: 10px; }
+.card.paused .ring { display: block; }
+.card.paused .ring .val { stroke: var(--amber); filter: drop-shadow(0 0 6px rgba(251,191,36,.7)); }
+.card.paused .card-progress div { background: var(--amber); box-shadow: 0 0 12px var(--amber); }
+.state-paused .pill { color: var(--amber); background: rgba(251,191,36,.12); border-color: rgba(251,191,36,.35); }
+.card-frozen { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--muted, #9aa0b4);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; cursor: help; }
+.card-frozen[hidden] { display: none; }
+.card-frozen svg { flex: none; width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+.card-frozen span { overflow: hidden; text-overflow: ellipsis; }
+.bar.paused .fill { background: linear-gradient(90deg, #f59e0b, #fbbf24); box-shadow: 0 0 14px rgba(251,191,36,.6); }
+#pauseBtn[disabled] { opacity: .6; }

@@ -206,6 +206,19 @@ class Cancelled(Exception):
     pass
 
 
+class Paused(Exception):
+    """Le traitement a été mis en pause : il pourra reprendre exactement au même endroit."""
+
+
+_PAUSE = object()   # signal interne de mise en pause entre threads
+
+# Segments vidéo : le résultat est encodé par morceaux enregistrés au fur et à mesure,
+# ce qui permet de reprendre après une pause, une fermeture ou une coupure de courant.
+SEG_MAX_FRAMES = 900
+SEG_MAX_SECONDS = 90.0
+PNG_END = b"IEND\xaeB`\x82"
+
+
 class _Stopped(Exception):
     """Interne : un autre thread a demandé l'arrêt."""
 
@@ -505,23 +518,67 @@ def encoder_args(settings: Settings) -> list:
     return args
 
 
-def build_decoder_cmd(info: VideoInfo, plan: Plan) -> list:
+def _split_decode_filter(plan: Plan) -> tuple[list, list]:
+    parts = [p for p in plan.decode_filter.split(",") if p]
+    return [p for p in parts if p.startswith("bwdif")], [p for p in parts if not p.startswith("bwdif")]
+
+
+def build_decoder_cmd(info: VideoInfo, plan: Plan, start: int = 0, p0: int = 0) -> list:
+    """Décode la vidéo en PNG à fréquence constante, à partir de l'image n° `start`.
+
+    Les horodatages absolus (-copyts) + le filtre fps donnent à chaque image un numéro
+    fixe (pts), identique que l'on décode depuis le début ou après une reprise : la
+    sélection `pts >= p0 + start` retombe donc exactement sur la bonne image."""
+    deint, rest = _split_decode_filter(plan)
+    chain = deint + [f"fps={info.fps}"]
+    seek = []
+    if start > 0:
+        chain.append(f"select='gte(pts\\,{int(p0) + int(start)})'")
+        t = start / info.fps_float - 5.0
+        if t > 0:
+            seek = ["-ss", f"{t:.3f}"]
+    chain += rest
     return [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
-            "-i", info.path, "-map", "0:v:0", "-an", "-sn", "-dn",
-            "-vf", plan.decode_filter, "-fps_mode", "cfr", "-r", info.fps,
+            *seek, "-copyts", "-start_at_zero", "-i", info.path,
+            "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", ",".join(chain),
+            "-fps_mode", "passthrough",
             "-c:v", "png", "-compression_level", "1", "-f", "image2pipe", "-"]
 
 
-def build_encoder_cmd(info: VideoInfo, plan: Plan, settings: Settings, output: str) -> list:
-    cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
-           "-f", "image2pipe", "-framerate", plan.out_fps or info.fps, "-c:v", "png", "-i", "-",
-           "-i", info.path,
-           "-map", "0:v:0", "-vf", plan.encode_filter]
-    cmd += encoder_args(settings)
-    cmd += ["-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-            "-color_range", "tv"]
+def first_frame_index(info: VideoInfo) -> int:
+    """Numéro (pts) de la première image après le filtre fps (≠ 0 si la vidéo démarre en retard)."""
+    proc = tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-nostats",
+                      "-loglevel", "info", "-copyts", "-start_at_zero", "-i", info.path,
+                      "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", f"fps={info.fps},showinfo",
+                      "-frames:v", "1", "-f", "null", "-"],
+                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=300)
+    import re
+    m = re.search(r"\bn:\s*0\s+pts:\s*(-?\d+)", proc.stderr.decode("utf-8", "replace"))
+    return int(m.group(1)) if m else 0
 
-    # audio
+
+def build_segment_cmd(info: VideoInfo, plan: Plan, settings: Settings, path: str) -> list:
+    """Encode un morceau de la vidéo agrandie (images PNG sur stdin -> Matroska)."""
+    args = encoder_args(settings)
+    if "-tag:v" in args:  # l'étiquette hvc1 n'est utile que dans le MP4 final
+        i = args.index("-tag:v")
+        del args[i:i + 2]
+    return [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+            "-f", "image2pipe", "-framerate", plan.out_fps or info.fps, "-c:v", "png", "-i", "-",
+            "-vf", plan.encode_filter, *args,
+            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-color_range", "tv", "-an", "-f", "matroska", path]
+
+
+def build_final_cmd(info: VideoInfo, plan: Plan, settings: Settings, list_path: str,
+                    output: str) -> list:
+    """Assemble les morceaux (sans réencodage) et ajoute son, sous-titres, chapitres."""
+    cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
+           "-f", "concat", "-safe", "0", "-i", list_path, "-i", info.path,
+           "-map", "0:v:0", "-c:v", "copy"]
+    enc = ENCODERS_BY_KEY.get(settings.encoder, ENCODERS[0])
+    if enc.family == "hevc" and settings.container == "mp4":
+        cmd += ["-tag:v", "hvc1"]
     if info.audio:
         for idx, _ in info.audio:
             cmd += ["-map", f"1:{idx}"]
@@ -530,7 +587,6 @@ def build_encoder_cmd(info: VideoInfo, plan: Plan, settings: Settings, output: s
             cmd += ["-c:a", "copy"]
         else:
             cmd += ["-c:a", "aac", "-b:a", "256k"]
-    # sous-titres
     if settings.container == "mkv":
         for idx, _ in info.subtitles:
             cmd += ["-map", f"1:{idx}"]
@@ -542,12 +598,12 @@ def build_encoder_cmd(info: VideoInfo, plan: Plan, settings: Settings, output: s
             cmd += ["-map", f"1:{idx}"]
         if text:
             cmd += ["-c:s", "mov_text"]
-
     cmd += ["-map_metadata", "1", "-map_chapters", "1", "-max_muxing_queue_size", "9999"]
-    if settings.container == "mp4":
-        cmd += ["-movflags", "+faststart"]
-    cmd += [output]
-    return cmd
+    if settings.container == "mkv":
+        cmd += ["-f", "matroska"]
+    else:
+        cmd += ["-movflags", "+faststart", "-f", "mp4"]
+    return cmd + [output]
 
 
 def build_ai_cmd(settings: Settings, plan: Plan, src: str, dst: str) -> list:
@@ -580,10 +636,11 @@ def build_rife_cmd(settings: Settings, plan: Plan, info: VideoInfo, src: str, ds
 def detect_scene_cuts(info: VideoInfo, plan: Plan, on_frame: Optional[Callable[[int], None]] = None,
                       register: Optional[Callable] = None) -> set:
     """Indices (0 = première image) des images qui commencent un nouveau plan."""
-    deint = plan.decode_filter.split(",")[0] if plan.decode_filter.startswith("bwdif") else ""
-    chain = ",".join(x for x in (deint, f"fps={info.fps}", "setpts=N", "scale=256:-2",
-                                 f"select='gt(scene,{SCENE_THRESHOLD})'", "metadata=print") if x)
+    deint, _ = _split_decode_filter(plan)
+    chain = ",".join(deint + [f"fps={info.fps}", "setpts=N", "scale=256:-2",
+                              f"select='gt(scene,{SCENE_THRESHOLD})'", "metadata=print"])
     cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info",
+           "-copyts", "-start_at_zero",
            "-i", info.path, "-map", "0:v:0", "-an", "-sn", "-dn", "-vf", chain,
            "-f", "null", "-", "-progress", "pipe:1"]
     log = tempfile.TemporaryFile()
@@ -716,12 +773,29 @@ class Upscaler:
         self._procs: list[subprocess.Popen] = []
         self._lock = threading.Lock()
         self._errors: list[BaseException] = []
+        self._pausing = threading.Event()
+        self._scene_proc: Optional[subprocess.Popen] = None
+        self._is_image = False
 
     # ---- contrôle ---------------------------------------------------------------
     def cancel(self) -> None:
         self._user_cancel = True
         self._stop.set()
         self._kill_all()
+
+    def pause(self) -> None:
+        """Demande une pause : les images déjà calculées sont enregistrées, puis le
+        traitement s'arrête. `process` lève alors `Paused`."""
+        self._pausing.set()
+        p = self._scene_proc
+        if p is not None and p.poll() is None:
+            p.kill()
+        if self._is_image:  # une image est refaite entièrement à la reprise
+            self._kill_all()
+
+    @property
+    def pausing(self) -> bool:
+        return self._pausing.is_set()
 
     def _kill_all(self) -> None:
         with self._lock:
@@ -763,7 +837,32 @@ class Upscaler:
             except queue.Empty:
                 continue
 
+    def _get_or_pause(self, q: queue.Queue):
+        while True:
+            if self._stop.is_set():
+                raise _Stopped()
+            if self._pausing.is_set():
+                return _PAUSE
+            try:
+                return q.get(timeout=0.2)
+            except queue.Empty:
+                continue
+
+    def _put_or_pause(self, q: queue.Queue, item) -> bool:
+        while True:
+            if self._stop.is_set():
+                raise _Stopped()
+            if self._pausing.is_set():
+                return False
+            try:
+                q.put(item, timeout=0.2)
+                return True
+            except queue.Full:
+                continue
+
     def _reset(self) -> None:
+        self._pausing.clear()
+        self._is_image = False
         self._stop.clear()
         self._user_cancel = False
         self._errors = []
@@ -863,7 +962,13 @@ class Upscaler:
         return f"L'IA (Real-ESRGAN) a échoué.{hint}\n\nJournal :\n{tail[-1000:]}"
 
     # ---- traitement complet -----------------------------------------------------
-    def process(self, path: str, settings: Settings, output: Optional[str] = None) -> str:
+    def process(self, path: str, settings: Settings, output: Optional[str] = None,
+                job_dir: Optional[str] = None, state: Optional[dict] = None,
+                on_state: Optional[Callable[[dict], None]] = None) -> str:
+        """Traite un fichier. Pour une vidéo, `job_dir` (dossier persistant) + `state`
+        (dict sérialisable en JSON, mis à jour via `on_state` après chaque morceau encodé)
+        permettent de reprendre plus tard ; sans `job_dir`, un dossier temporaire est utilisé.
+        Lève `Paused` si `pause()` a été appelé."""
         self._reset()
         info = probe(path)
         plan = make_plan(info, settings)
@@ -882,26 +987,531 @@ class Upscaler:
         for n in plan.notes:
             self.on_log("Note : " + n)
         if info.is_image:
+            self._is_image = True
             return self._process_image(info, plan, settings, output)
 
+        persistent = job_dir is not None
+        if not persistent:
+            job_dir = tempfile.mkdtemp(prefix="upv_job_", dir=settings.temp_dir or None)
+        os.makedirs(job_dir, exist_ok=True)
+        state = self._check_state(state if state is not None else {}, job_dir, plan)
+        self._state, self._job_dir = state, job_dir
+        self._on_state = on_state or (lambda st: None)
+        self._samples, self._t_start, self._last_report = collections.deque(), time.monotonic(), 0.0
+        self._total = max(1, info.frames * plan.interp)
+
         work = tempfile.mkdtemp(prefix="upv_", dir=settings.temp_dir or None)
+        finished = False
         try:
             free = shutil.disk_usage(work).free
             need = plan.batch_size * plan.ai_w * plan.ai_h * 3 * 0.6 * 3
             if free < need:
                 self.on_log(f"Attention : peu d'espace disque libre dans le dossier temporaire "
                             f"({free / 1e9:.1f} Go, ~{need / 1e9:.1f} Go recommandés).")
-            self._pipeline(info, plan, settings, output, work)
-        except BaseException:
-            try:
-                if os.path.exists(output):
-                    os.remove(output)
-            except OSError:
-                pass
-            raise
+            if not state.get("complete"):
+                self._run_video(info, plan, settings, work)
+            self._finalize(info, plan, settings, output)
+            finished = True
+            return output
         finally:
             shutil.rmtree(work, ignore_errors=True)
-        return output
+            if finished or not persistent:
+                shutil.rmtree(job_dir, ignore_errors=True)
+
+    def _save_state(self) -> None:
+        try:
+            self._on_state(self._state)
+        except Exception as e:  # noqa: BLE001
+            self.on_log(f"Sauvegarde de la progression impossible : {e}")
+
+    def _check_state(self, state: dict, job_dir: str, plan: Plan) -> dict:
+        """Valide l'état d'une reprise (morceaux présents…) ; sinon repart de zéro."""
+        defaults = {"src_done": 0, "out_done": 0, "segments": [], "seg_frames": [], "cuts": None,
+                    "p0": None, "prev_last": "", "complete": False}
+        for k, v in defaults.items():
+            state.setdefault(k, v if not isinstance(v, list) else list(v))
+        for name in os.listdir(job_dir):
+            if name.endswith(".part"):
+                try:
+                    os.remove(os.path.join(job_dir, name))
+                except OSError:
+                    pass
+        ok = (all(os.path.isfile(os.path.join(job_dir, n)) for n in state["segments"])
+              and len(state["seg_frames"]) == len(state["segments"]))
+        if ok and state["src_done"] > 0 and plan.interp > 1:
+            ok = bool(state["prev_last"]) and os.path.isfile(os.path.join(job_dir, state["prev_last"]))
+        if not ok:
+            self.on_log("Données de reprise incomplètes : le traitement repart du début.")
+            for name in os.listdir(job_dir):
+                if name.startswith(("seg_", "last_")):
+                    try:
+                        os.remove(os.path.join(job_dir, name))
+                    except OSError:
+                        pass
+            state.update(src_done=0, out_done=0, segments=[], seg_frames=[], prev_last="",
+                         complete=False)
+        return state
+
+    # ---- vidéos -------------------------------------------------------------------
+    def _run_video(self, info: VideoInfo, plan: Plan, settings: Settings, work: str) -> None:
+        st = self._state
+        self._samples = collections.deque()
+        self._t_start = time.monotonic()
+        self._last_report = 0.0
+        self._interp = plan.interp
+        self._tail_dups = max(0, plan.interp - 1)
+        self._total = max(1, info.frames * plan.interp)
+        if st["p0"] is None:
+            st["p0"] = first_frame_index(info)
+            self._save_state()
+        if plan.interp > 1:
+            tools.find_tool(RIFE_BIN)  # erreur claire si absent
+            if not os.path.isdir(rife_model_dir()):
+                raise UpscaleError(f"Modèle d'interpolation introuvable : {rife_model_dir()}")
+            if st["cuts"] is None:
+                self._total = max(1, info.frames)
+                self.on_log("Détection des changements de plan (pour ne pas mélanger deux scènes)…")
+
+                def reg(p):
+                    self._register(p)
+                    self._scene_proc = p
+
+                cuts = detect_scene_cuts(info, plan,
+                                         on_frame=lambda n: self._report(n, "Analyse des plans"),
+                                         register=reg)
+                self._scene_proc = None
+                if self._user_cancel:
+                    raise Cancelled()
+                if self._pausing.is_set():
+                    raise Paused()
+                st["cuts"] = sorted(cuts)
+                self._save_state()
+                self.on_log(f"{len(cuts)} changement(s) de plan détecté(s).")
+                self._samples = collections.deque()
+                self._t_start = time.monotonic()
+                self._total = max(1, info.frames * plan.interp)
+        self._cuts = set(st["cuts"] or [])
+        start = int(st["src_done"])
+        self._src_seen = start
+        self._prev_last = None
+        if start > 0 and plan.interp > 1:
+            self._prev_last = os.path.join(work, "prev_last.png")
+            shutil.copyfile(os.path.join(self._job_dir, st["prev_last"]), self._prev_last)
+        if start > 0:
+            pct = 100.0 * start / max(1, info.frames)
+            self.on_log(f"Reprise à l'image {start + 1} / {info.frames} ({pct:.1f} %) – "
+                        f"{len(st['segments'])} morceau(x) déjà prêt(s).")
+        self._done_ai = int(st["out_done"])
+        self._pipeline(info, plan, settings, work, start)
+
+    def _pipeline(self, info: VideoInfo, plan: Plan, settings: Settings, work: str,
+                  start: int) -> None:
+        dec_log = os.path.join(work, "decoder.log")
+        ai_log = os.path.join(work, "realesrgan.log")
+        dec_cmd = build_decoder_cmd(info, plan, start, self._state.get("p0") or 0)
+
+        with open(dec_log, "wb") as dlf:
+            dec = self._register(tools.popen(dec_cmd, stdout=subprocess.PIPE, stderr=dlf,
+                                             stdin=subprocess.DEVNULL, bufsize=1 << 20))
+            ai_q: queue.Queue = queue.Queue(maxsize=1)
+            enc_q: queue.Queue = queue.Queue(maxsize=1)
+            self._encoded = 0
+
+            reader = threading.Thread(target=self._reader_thread,
+                                      args=(dec.stdout, work, plan.batch_size, ai_q, start),
+                                      daemon=True)
+            writer = threading.Thread(target=self._writer_thread,
+                                      args=(enc_q, info, plan, settings, work), daemon=True)
+            reader.start()
+            writer.start()
+            self._report(self._done_ai, "IA" if plan.upscale else "Interpolation", force=True)
+            try:
+                self._ai_loop(settings, plan, info, ai_q, enc_q, ai_log)
+            except _Stopped:
+                pass
+            except BaseException as e:  # noqa: BLE001
+                self._fail(e)
+
+            writer.join()
+            if self._pausing.is_set() and not self._errors and not self._user_cancel:
+                try:
+                    dec.kill()
+                except Exception:
+                    pass
+            reader.join()
+
+            if self._user_cancel:
+                self._kill_all()
+                raise Cancelled()
+            if self._errors:
+                self._kill_all()
+                raise self._errors[0]
+            if self._pausing.is_set():
+                dec.wait()
+                self.on_log(f"⏸ En pause : {self._state['src_done']} image(s) source traitée(s) "
+                            f"et enregistrée(s).")
+                raise Paused()
+
+            dec_rc = dec.wait()
+            if dec_rc != 0:
+                raise UpscaleError("Le décodage de la vidéo a échoué :\n" + _tail(dec_log))
+            if self._encoded == 0 and not self._state["segments"]:
+                raise UpscaleError("Aucune image n'a été produite.\n" + _tail(dec_log))
+            self._state["complete"] = True
+            self._save_state()
+            self._total = self._done_ai = int(self._state["out_done"])
+            self._report(self._done_ai, "Finalisation", force=True)
+
+    def _finalize(self, info: VideoInfo, plan: Plan, settings: Settings, output: str) -> None:
+        self.on_log("Assemblage de la vidéo finale (son, sous-titres, chapitres)…")
+        lst = os.path.join(self._job_dir, "liste.txt")
+        with open(lst, "w", encoding="utf-8") as f:
+            fps = Fraction(plan.out_fps)
+            for name, n in zip(self._state["segments"], self._state["seg_frames"]):
+                # durée exacte de chaque morceau : pas de dérive son / image à l'assemblage
+                # (Matroska arrondit les horodatages à la milliseconde)
+                f.write(f"file '{name}'\nduration {float(n / fps):.6f}\n")
+        tmp = output + ".partiel"
+        proc = tools.run(build_final_cmd(info, plan, settings, lst, tmp),
+                         stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        if proc.returncode != 0 or not os.path.isfile(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+            raise UpscaleError("Assemblage de la vidéo finale impossible :\n"
+                               + proc.stderr.decode("utf-8", "replace")[-800:])
+        os.replace(tmp, output)
+        self._report(int(self._state["out_done"]), "Terminé", force=True)
+
+    def _reader_thread(self, stream, work: str, batch_size: int, ai_q: queue.Queue,
+                       start: int) -> None:
+        try:
+            index, batch, count, folder = start, 0, 0, None
+            for png in iter_png_stream(stream):
+                if self._stop.is_set() or self._pausing.is_set():
+                    return
+                if folder is None:
+                    folder = os.path.join(work, f"b{batch:05d}_in")
+                    os.makedirs(folder, exist_ok=True)
+                index += 1
+                with open(os.path.join(folder, f"{index:08d}.png"), "wb") as f:
+                    f.write(png)
+                count += 1
+                if count >= batch_size:
+                    if not self._put_or_pause(ai_q, (folder, count)):
+                        return
+                    batch, count, folder = batch + 1, 0, None
+            if self._pausing.is_set():
+                return
+            if folder is not None and count:
+                if not self._put_or_pause(ai_q, (folder, count)):
+                    return
+            self._total = max(index * self._interp, 1)
+            self._put_or_pause(ai_q, None)
+        except _Stopped:
+            pass
+        except BaseException as e:  # noqa: BLE001
+            if not self._stop.is_set() and not self._pausing.is_set():
+                self._fail(e)
+
+    def _wait_proc(self, proc: subprocess.Popen, on_tick=None) -> bool:
+        """Attend la fin d'un outil. Retourne False si une pause a interrompu l'outil."""
+        while proc.poll() is None:
+            if self._stop.is_set():
+                proc.kill()
+                proc.wait()
+                raise _Stopped()
+            if self._pausing.is_set():
+                proc.kill()
+                proc.wait()
+                with self._lock:
+                    if proc in self._procs:
+                        self._procs.remove(proc)
+                return False
+            time.sleep(0.25)
+            if on_tick:
+                on_tick()
+        with self._lock:
+            if proc in self._procs:
+                self._procs.remove(proc)
+        return True
+
+    def _ai_loop(self, settings: Settings, plan: Plan, info: VideoInfo, ai_q: queue.Queue,
+                 enc_q: queue.Queue, log_path: str) -> None:
+        while True:
+            item = self._get_or_pause(ai_q)
+            if item is _PAUSE:
+                self._put(enc_q, _PAUSE)
+                return
+            if item is None:
+                self._put(enc_q, None)
+                return
+            in_dir, count = item
+            src_count, srclast, has_prev = count, None, False
+            if plan.interp > 1:
+                res = self._interpolate(settings, plan, info, in_dir, count, log_path)
+                if res is None:
+                    self._put(enc_q, _PAUSE)
+                    return
+                in_dir, count, srclast, has_prev = res
+            if not plan.upscale:
+                self._done_ai += count
+                self._report(self._done_ai, "Interpolation", force=True)
+                self._put(enc_q, (in_dir, count, src_count, srclast))
+                continue
+            out_dir = in_dir[:-3] + "_out"
+            os.makedirs(out_dir, exist_ok=True)
+            base = self._done_ai
+            with open(log_path, "wb") as lf:
+                proc = self._register(tools.popen(build_ai_cmd(settings, plan, in_dir, out_dir),
+                                                  stdout=lf, stderr=subprocess.STDOUT,
+                                                  stdin=subprocess.DEVNULL))
+                done = self._wait_proc(proc, lambda: self._report(base + _count_png(out_dir), "IA"))
+            if not done:  # pause : on garde les images déjà agrandies
+                part = self._salvage(in_dir, out_dir, plan, has_prev)
+                if part:
+                    self._done_ai = base + part[1]
+                    self._put(enc_q, part)
+                self._put(enc_q, _PAUSE)
+                return
+            produced = _count_png(out_dir)
+            if self._stop.is_set():
+                raise _Stopped()
+            if proc.returncode != 0 or produced < count:
+                raise UpscaleError(self._ai_error_message(log_path))
+            self._done_ai = base + count
+            self._report(self._done_ai, "IA", force=True)
+            shutil.rmtree(in_dir, ignore_errors=True)
+            self._put(enc_q, (out_dir, count, src_count, srclast))
+
+    def _salvage(self, in_dir: str, out_dir: str, plan: Plan, has_prev: bool):
+        """Après une pause pendant l'IA : garde les premières images agrandies complètes
+        (en nombre cohérent avec les images source) pour reprendre exactement ensuite."""
+        names = sorted(n for n in os.listdir(in_dir) if n.endswith(".png"))
+        n_ok = 0
+        for n in names:
+            p = os.path.join(out_dir, os.path.splitext(n)[0] + ".png")
+            try:
+                with open(p, "rb") as f:
+                    f.seek(-8, 2)
+                    if f.read(8) != PNG_END:
+                        break
+            except OSError:
+                break
+            n_ok += 1
+        k = plan.interp
+        if k > 1:
+            if has_prev:
+                src = n_ok // k
+                keep = src * k
+            else:
+                src = 1 + (n_ok - 1) // k if n_ok >= 1 else 0
+                keep = 1 + (src - 1) * k if src else 0
+        else:
+            src = keep = n_ok
+        srclast = None
+        if keep and k > 1:
+            srclast = out_dir + "_srclast.png"
+            shutil.copyfile(os.path.join(in_dir, names[keep - 1]), srclast)
+        kept = {os.path.splitext(n)[0] + ".png" for n in names[:keep]}
+        for n in os.listdir(out_dir):
+            if n not in kept:
+                try:
+                    os.remove(os.path.join(out_dir, n))
+                except OSError:
+                    pass
+        shutil.rmtree(in_dir, ignore_errors=True)
+        if not keep:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            return None
+        self.on_log(f"Pause : {keep} image(s) déjà agrandie(s) du lot en cours conservée(s).")
+        return (out_dir, keep, src, srclast)
+
+    def _interpolate(self, settings: Settings, plan: Plan, info: VideoInfo, in_dir: str,
+                     count: int, log_path: str):
+        """Crée les images intermédiaires d'un lot avec RIFE.
+
+        Le lot est précédé de la dernière image du lot précédent, pour interpoler aussi la
+        transition entre deux lots. Les images d'origine sont recopiées telles quelles et, aux
+        changements de plan, l'image intermédiaire est remplacée par l'image précédente.
+        Retourne (dossier, nb d'images, dernière image source, lot précédé ?) ou None (pause)."""
+        k = plan.interp
+        names = sorted(n for n in os.listdir(in_dir) if n.endswith(".png"))
+        first_global = self._src_seen               # indice global de names[0]
+        inputs = [os.path.join(in_dir, n) for n in names]
+        has_prev = self._prev_last is not None
+        if has_prev:
+            prev_copy = os.path.join(in_dir, "00000000_prev.png")
+            shutil.copyfile(self._prev_last, prev_copy)
+            inputs.insert(0, prev_copy)
+        n_in = len(inputs)
+        g0 = first_global - (1 if has_prev else 0)   # indice global de inputs[0]
+        out_dir = in_dir[:-3] + "_rin"
+        os.makedirs(out_dir, exist_ok=True)
+        keep = range(1, k * (n_in - 1) + 1) if has_prev else range(0, k * (n_in - 1) + 1)
+
+        rife_out = in_dir[:-3] + "_rife"
+        if n_in >= 2:
+            os.makedirs(rife_out, exist_ok=True)
+            self._report(self._done_ai, "Interpolation", force=True)
+            with open(log_path, "wb") as lf:
+                proc = self._register(tools.popen(
+                    build_rife_cmd(settings, plan, info, in_dir, rife_out, k * n_in),
+                    stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL))
+                done = self._wait_proc(proc)
+            if not done:
+                shutil.rmtree(rife_out, ignore_errors=True)
+                shutil.rmtree(out_dir, ignore_errors=True)
+                return None
+            if self._stop.is_set():
+                raise _Stopped()
+            if proc.returncode != 0 or _count_png(rife_out) < k * n_in - (k - 1):
+                tail = _tail(log_path)
+                raise UpscaleError("L'interpolation d'images (RIFE) a échoué."
+                                   + ("\n\nMémoire vidéo insuffisante." if "memory" in tail.lower() else "")
+                                   + f"\n\nJournal :\n{tail[-1000:]}")
+
+        out_index = 0
+        for i in keep:
+            sx, rem = divmod(i, k)
+            dst = os.path.join(out_dir, f"{out_index:08d}.png")
+            out_index += 1
+            if rem == 0:                       # image d'origine : copie exacte
+                shutil.copyfile(inputs[sx], dst)
+            elif (g0 + sx + 1) in self._cuts:  # changement de plan : pas de fondu
+                shutil.copyfile(inputs[sx], dst)
+            else:
+                os.replace(os.path.join(rife_out, f"{i + 1:08d}.png"), dst)
+        # dernière image source : pour le lot suivant, et pour une reprise après une pause
+        srclast = out_dir + "_srclast.png"
+        shutil.copyfile(inputs[-1], srclast)
+        self._prev_last = os.path.join(os.path.dirname(in_dir), "prev_last.png")
+        shutil.copyfile(inputs[-1], self._prev_last)
+        self._src_seen += len(names)
+        shutil.rmtree(in_dir, ignore_errors=True)
+        shutil.rmtree(rife_out, ignore_errors=True)
+        return out_dir, out_index, srclast, has_prev
+
+    # ---- encodage par morceaux --------------------------------------------------------
+    def _open_segment(self, info: VideoInfo, plan: Plan, settings: Settings, work: str) -> dict:
+        n = len(self._state["segments"]) + 1
+        name = f"seg_{n:05d}.mkv"
+        part = os.path.join(self._job_dir, name + ".part")
+        log = os.path.join(work, f"encoder_{n:05d}.log")
+        lf = open(log, "wb")
+        proc = self._register(tools.popen(build_segment_cmd(info, plan, settings, part),
+                                          stdin=subprocess.PIPE, stderr=lf,
+                                          stdout=subprocess.DEVNULL, bufsize=1 << 20))
+        return {"name": name, "part": part, "proc": proc, "log": log, "lf": lf, "frames": 0,
+                "src": 0, "t0": time.monotonic(), "srclast": None}
+
+    def _close_segment(self, seg: dict) -> None:
+        proc = seg["proc"]
+        try:
+            proc.stdin.close()
+        except Exception:
+            pass
+        rc = proc.wait()
+        seg["lf"].close()
+        with self._lock:
+            if proc in self._procs:
+                self._procs.remove(proc)
+        if rc != 0:
+            raise UpscaleError("L'encodage de la vidéo a échoué :\n" + _tail(seg["log"]))
+        if seg["frames"] == 0:
+            try:
+                os.remove(seg["part"])
+            except OSError:
+                pass
+            return
+        os.replace(seg["part"], os.path.join(self._job_dir, seg["name"]))
+        st = self._state
+        old_last = st.get("prev_last") or ""
+        if seg["srclast"]:
+            # un fichier par morceau : l'état enregistré désigne toujours la bonne image,
+            # même si le PC s'éteint entre deux écritures
+            st["prev_last"] = "last_" + os.path.splitext(seg["name"])[0] + ".png"
+            os.replace(seg["srclast"], os.path.join(self._job_dir, st["prev_last"]))
+        st["segments"].append(seg["name"])
+        st["seg_frames"].append(int(seg["frames"]))
+        st["src_done"] = int(st["src_done"]) + seg["src"]
+        st["out_done"] = int(st["out_done"]) + seg["frames"]
+        self._save_state()
+        if old_last and old_last != st.get("prev_last"):
+            try:
+                os.remove(os.path.join(self._job_dir, old_last))
+            except OSError:
+                pass
+
+    def _abort_segment(self, seg: Optional[dict]) -> None:
+        if not seg:
+            return
+        try:
+            seg["proc"].kill()
+            seg["proc"].wait()
+            seg["lf"].close()
+            os.remove(seg["part"])
+        except Exception:
+            pass
+
+    def _writer_thread(self, enc_q: queue.Queue, info: VideoInfo, plan: Plan,
+                       settings: Settings, work: str) -> None:
+        seg = None
+        try:
+            last = b""
+            while True:
+                item = self._get(enc_q)
+                if item is None or item is _PAUSE:
+                    if item is None and last and self._tail_dups:
+                        # interpolation : la dernière image est répétée (durée exacte)
+                        if seg is None:
+                            seg = self._open_segment(info, plan, settings, work)
+                        for _ in range(self._tail_dups):
+                            self._write_frame(seg, last)
+                    if seg is not None:
+                        s, seg = seg, None
+                        self._close_segment(s)
+                    return
+                out_dir, _, src_count, srclast = item
+                if seg is None:
+                    seg = self._open_segment(info, plan, settings, work)
+                for name in sorted(n for n in os.listdir(out_dir) if n.endswith(".png")):
+                    if self._stop.is_set():
+                        raise _Stopped()
+                    p = os.path.join(out_dir, name)
+                    with open(p, "rb") as f:
+                        last = f.read()
+                    self._write_frame(seg, last)
+                    os.remove(p)
+                shutil.rmtree(out_dir, ignore_errors=True)
+                seg["src"] += src_count
+                if srclast:
+                    if seg["srclast"] and seg["srclast"] != srclast:
+                        try:
+                            os.remove(seg["srclast"])
+                        except OSError:
+                            pass
+                    seg["srclast"] = srclast
+                if (seg["frames"] >= SEG_MAX_FRAMES
+                        or time.monotonic() - seg["t0"] >= SEG_MAX_SECONDS):
+                    s, seg = seg, None
+                    self._close_segment(s)
+        except _Stopped:
+            self._abort_segment(seg)
+        except BaseException as e:  # noqa: BLE001
+            self._abort_segment(seg)
+            if not self._stop.is_set():
+                self._fail(e)
+
+    def _write_frame(self, seg: dict, data: bytes) -> None:
+        try:
+            seg["proc"].stdin.write(data)
+        except (BrokenPipeError, OSError):
+            seg["proc"].wait()
+            raise UpscaleError("L'encodeur vidéo s'est arrêté :\n" + _tail(seg["log"]))
+        seg["frames"] += 1
+        self._encoded += 1
 
     # ---- images -------------------------------------------------------------------
     def _process_image(self, info: VideoInfo, plan: Plan, settings: Settings, output: str) -> str:
@@ -927,6 +1537,8 @@ class Upscaler:
                 p.wait()
             if self._user_cancel:
                 raise Cancelled()
+            if self._pausing.is_set():
+                raise Paused()
             if not os.path.isfile(ai):
                 raise UpscaleError(self._ai_error_message(log))
             self._report(1, "Enregistrement", force=True)
@@ -951,255 +1563,3 @@ class Upscaler:
             return output
         finally:
             shutil.rmtree(work, ignore_errors=True)
-
-    # ---- vidéos -------------------------------------------------------------------
-    def _pipeline(self, info: VideoInfo, plan: Plan, settings: Settings,
-                  output: str, work: str) -> None:
-        self._samples = collections.deque()
-        self._t_start = time.monotonic()
-        self._last_report = 0.0
-        self._cuts: set = set()
-        self._prev_last: Optional[str] = None   # dernière image source du lot précédent
-        self._src_seen = 0                      # images source déjà interpolées
-        self._tail_dups = max(0, plan.interp - 1)
-        if plan.interp > 1:
-            tools.find_tool(RIFE_BIN)  # erreur claire si absent
-            if not os.path.isdir(rife_model_dir()):
-                raise UpscaleError(f"Modèle d'interpolation introuvable : {rife_model_dir()}")
-            self._total = max(1, info.frames)
-            self.on_log("Détection des changements de plan (pour ne pas mélanger deux scènes)…")
-            self._cuts = detect_scene_cuts(info, plan,
-                                           on_frame=lambda n: self._report(n, "Analyse des plans"),
-                                           register=self._register)
-            if self._user_cancel:
-                raise Cancelled()
-            self.on_log(f"{len(self._cuts)} changement(s) de plan détecté(s).")
-            self._samples = collections.deque()
-            self._t_start = time.monotonic()
-        self._total = max(1, info.frames * plan.interp)
-        self._done_ai = 0
-
-        dec_log = os.path.join(work, "decoder.log")
-        enc_log = os.path.join(work, "encoder.log")
-        ai_log = os.path.join(work, "realesrgan.log")
-
-        dec_cmd = build_decoder_cmd(info, plan)
-        enc_cmd = build_encoder_cmd(info, plan, settings, output)
-
-        with open(dec_log, "wb") as dlf, open(enc_log, "wb") as elf:
-            dec = self._register(tools.popen(dec_cmd, stdout=subprocess.PIPE, stderr=dlf,
-                                             stdin=subprocess.DEVNULL, bufsize=1 << 20))
-            enc = self._register(tools.popen(enc_cmd, stdin=subprocess.PIPE, stderr=elf,
-                                             stdout=subprocess.DEVNULL, bufsize=1 << 20))
-            ai_q: queue.Queue = queue.Queue(maxsize=1)
-            enc_q: queue.Queue = queue.Queue(maxsize=1)
-            self._encoded = 0
-            self._interp = plan.interp
-
-            reader = threading.Thread(target=self._reader_thread,
-                                      args=(dec.stdout, work, plan.batch_size, ai_q), daemon=True)
-            writer = threading.Thread(target=self._writer_thread,
-                                      args=(enc.stdin, enc_q), daemon=True)
-            reader.start()
-            writer.start()
-            self._report(0, "IA" if plan.upscale else "Interpolation", force=True)
-            try:
-                self._ai_loop(settings, plan, info, ai_q, enc_q, ai_log)
-            except _Stopped:
-                pass
-            except BaseException as e:  # noqa: BLE001
-                self._fail(e)
-
-            reader.join()
-            writer.join()
-
-            if self._user_cancel:
-                self._kill_all()
-                raise Cancelled()
-            if self._errors:
-                self._kill_all()
-                err = self._errors[0]
-                if isinstance(err, BrokenPipeError) or (isinstance(err, OSError)
-                                                        and not isinstance(err, UpscaleError)):
-                    enc.wait()
-                    raise UpscaleError("L'encodeur vidéo s'est arrêté :\n" + _tail(enc_log))
-                raise err
-
-            self._report(self._done_ai, "Finalisation", force=True)
-            self.on_log("Finalisation de l'encodage…")
-            dec_rc = dec.wait()
-            enc_rc = enc.wait()
-            if dec_rc != 0:
-                raise UpscaleError("Le décodage de la vidéo a échoué :\n" + _tail(dec_log))
-            if enc_rc != 0:
-                raise UpscaleError("L'encodage de la vidéo a échoué :\n" + _tail(enc_log))
-            if self._encoded == 0:
-                raise UpscaleError("Aucune image n'a été produite.\n" + _tail(dec_log))
-            self._total = self._encoded
-            self._report(self._encoded, "Terminé", force=True)
-
-    def _reader_thread(self, stream, work: str, batch_size: int, ai_q: queue.Queue) -> None:
-        try:
-            index, batch, count, folder = 0, 0, 0, None
-            for png in iter_png_stream(stream):
-                if self._stop.is_set():
-                    return
-                if folder is None:
-                    folder = os.path.join(work, f"b{batch:05d}_in")
-                    os.makedirs(folder, exist_ok=True)
-                index += 1
-                with open(os.path.join(folder, f"{index:08d}.png"), "wb") as f:
-                    f.write(png)
-                count += 1
-                if count >= batch_size:
-                    self._put(ai_q, (folder, count))
-                    batch, count, folder = batch + 1, 0, None
-            if folder is not None and count:
-                self._put(ai_q, (folder, count))
-            self._total = max(index * self._interp, 1)
-            self._put(ai_q, None)
-        except _Stopped:
-            pass
-        except BaseException as e:  # noqa: BLE001
-            if not self._stop.is_set():
-                self._fail(e)
-
-    def _ai_loop(self, settings: Settings, plan: Plan, info: VideoInfo, ai_q: queue.Queue,
-                 enc_q: queue.Queue, log_path: str) -> None:
-        while True:
-            item = self._get(ai_q)
-            if item is None:
-                self._put(enc_q, None)
-                return
-            in_dir, count = item
-            if plan.interp > 1:
-                in_dir, count = self._interpolate(settings, plan, info, in_dir, count, log_path)
-            if not plan.upscale:
-                self._done_ai += count
-                self._report(self._done_ai, "Interpolation", force=True)
-                self._put(enc_q, (in_dir, count))
-                continue
-            out_dir = in_dir[:-3] + "_out"
-            os.makedirs(out_dir, exist_ok=True)
-            base = self._done_ai
-            with open(log_path, "wb") as lf:
-                proc = self._register(tools.popen(build_ai_cmd(settings, plan, in_dir, out_dir),
-                                                  stdout=lf, stderr=subprocess.STDOUT,
-                                                  stdin=subprocess.DEVNULL))
-                while proc.poll() is None:
-                    if self._stop.is_set():
-                        proc.kill()
-                        proc.wait()
-                        raise _Stopped()
-                    time.sleep(0.3)
-                    self._report(base + _count_png(out_dir), "IA")
-            with self._lock:
-                self._procs.remove(proc)
-            produced = _count_png(out_dir)
-            if self._stop.is_set():
-                raise _Stopped()
-            if proc.returncode != 0 or produced < count:
-                raise UpscaleError(self._ai_error_message(log_path))
-            self._done_ai = base + count
-            self._report(self._done_ai, "IA", force=True)
-            shutil.rmtree(in_dir, ignore_errors=True)
-            self._put(enc_q, (out_dir, count))
-
-    def _interpolate(self, settings: Settings, plan: Plan, info: VideoInfo, in_dir: str,
-                     count: int, log_path: str) -> tuple[str, int]:
-        """Crée les images intermédiaires d'un lot avec RIFE.
-
-        Le lot est précédé de la dernière image du lot précédent, pour interpoler aussi la
-        transition entre deux lots. Les images d'origine sont recopiées telles quelles et, aux
-        changements de plan, l'image intermédiaire est remplacée par l'image précédente."""
-        k = plan.interp
-        names = sorted(n for n in os.listdir(in_dir) if n.endswith(".png"))
-        first_global = self._src_seen               # indice global de names[0]
-        inputs = [os.path.join(in_dir, n) for n in names]
-        has_prev = self._prev_last is not None
-        if has_prev:
-            prev_copy = os.path.join(in_dir, "00000000_prev.png")
-            shutil.move(self._prev_last, prev_copy)
-            inputs.insert(0, prev_copy)
-        n_in = len(inputs)
-        g0 = first_global - (1 if has_prev else 0)   # indice global de inputs[0]
-        out_dir = in_dir[:-3] + "_rin"
-        os.makedirs(out_dir, exist_ok=True)
-        keep = range(1, k * (n_in - 1) + 1) if has_prev else range(0, k * (n_in - 1) + 1)
-
-        rife_out = in_dir[:-3] + "_rife"
-        if n_in >= 2:
-            os.makedirs(rife_out, exist_ok=True)
-            self._report(self._done_ai, "Interpolation", force=True)
-            with open(log_path, "wb") as lf:
-                proc = self._register(tools.popen(
-                    build_rife_cmd(settings, plan, info, in_dir, rife_out, k * n_in),
-                    stdout=lf, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL))
-                while proc.poll() is None:
-                    if self._stop.is_set():
-                        proc.kill()
-                        proc.wait()
-                        raise _Stopped()
-                    time.sleep(0.3)
-            with self._lock:
-                self._procs.remove(proc)
-            if self._stop.is_set():
-                raise _Stopped()
-            if proc.returncode != 0 or _count_png(rife_out) < k * n_in - (k - 1):
-                tail = _tail(log_path)
-                raise UpscaleError("L'interpolation d'images (RIFE) a échoué."
-                                   + ("\n\nMémoire vidéo insuffisante." if "memory" in tail.lower() else "")
-                                   + f"\n\nJournal :\n{tail[-1000:]}")
-
-        out_index = 0
-        for i in keep:
-            sx, rem = divmod(i, k)
-            dst = os.path.join(out_dir, f"{out_index:08d}.png")
-            out_index += 1
-            if rem == 0:                       # image d'origine : copie exacte
-                shutil.copyfile(inputs[sx], dst)
-            elif (g0 + sx + 1) in self._cuts:  # changement de plan : pas de fondu
-                shutil.copyfile(inputs[sx], dst)
-            else:
-                os.replace(os.path.join(rife_out, f"{i + 1:08d}.png"), dst)
-        # garde la dernière image source pour le lot suivant
-        self._prev_last = os.path.join(os.path.dirname(in_dir), "prev_last.png")
-        shutil.move(inputs[-1], self._prev_last)
-        self._src_seen += len(names)
-        shutil.rmtree(in_dir, ignore_errors=True)
-        shutil.rmtree(rife_out, ignore_errors=True)
-        return out_dir, out_index
-
-    def _writer_thread(self, stdin, enc_q: queue.Queue) -> None:
-        try:
-            last = b""
-            while True:
-                item = self._get(enc_q)
-                if item is None:
-                    break
-                out_dir, _ = item
-                for name in sorted(n for n in os.listdir(out_dir) if n.endswith(".png")):
-                    if self._stop.is_set():
-                        raise _Stopped()
-                    p = os.path.join(out_dir, name)
-                    with open(p, "rb") as f:
-                        last = f.read()
-                    stdin.write(last)
-                    os.remove(p)
-                    self._encoded += 1
-                shutil.rmtree(out_dir, ignore_errors=True)
-            # interpolation : la dernière image est répétée pour garder la durée exacte
-            for _ in range(getattr(self, "_tail_dups", 0) if last else 0):
-                stdin.write(last)
-                self._encoded += 1
-            stdin.close()
-        except _Stopped:
-            pass
-        except BaseException as e:  # noqa: BLE001
-            if not self._stop.is_set():
-                self._fail(e)
-        finally:
-            try:
-                stdin.close()
-            except Exception:
-                pass

@@ -3,6 +3,8 @@
 Agrandit les images avec Pillow (bicubique)."""
 import os, sys, getopt
 from PIL import Image
+import time
+DELAY = float(os.environ.get('FAKE_DELAY', '0'))
 
 opts, _ = getopt.getopt(sys.argv[1:], "i:o:s:t:g:m:n:f:j:xv")
 o = dict(opts)
@@ -18,5 +20,6 @@ if os.path.isdir(src):
 else:
     pairs.append((src, dst))
 for a, b in pairs:
+    time.sleep(DELAY)
     im = Image.open(a).convert("RGB")
     im.resize((im.width * scale, im.height * scale), Image.BICUBIC).save(b, compress_level=1)

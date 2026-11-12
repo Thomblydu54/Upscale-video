@@ -3,6 +3,8 @@
 Les images intermédiaires sont un simple fondu (Pillow)."""
 import getopt, math, os, sys
 from PIL import Image
+import time
+DELAY = float(os.environ.get('FAKE_DELAY', '0'))
 
 opts, _ = getopt.getopt(sys.argv[1:], "0:1:i:o:n:s:m:g:j:f:xzuvh")
 o = dict(opts)
@@ -23,6 +25,7 @@ for i in range(numframe):
     sx = int(math.floor(fx)); fx -= sx
     if sx >= count - 1:
         sx, fx = count - 2, 1.0
+    time.sleep(DELAY)
     a, b = load(files[sx]), load(files[sx + 1])
     im = a if fx == 0 else b if fx == 1 else Image.blend(a, b, fx)
     im.save(os.path.join(dst, "%08d.png" % (i + 1)), compress_level=1)
