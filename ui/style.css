@@ -268,7 +268,7 @@ button { font: inherit; color: inherit; }
 
 .models { display: flex; flex-direction: column; gap: 8px; }
 .model-card {
-  position: relative; display: grid; grid-template-columns: 40px 1fr auto; align-items: center; gap: 12px;
+  position: relative; display: grid; grid-template-columns: 40px minmax(0, 1fr) auto; align-items: center; gap: 11px;
   padding: 11px 12px; border-radius: 14px; border: 1px solid var(--border); background: var(--surface);
   cursor: pointer; transition: .2s; text-align: left;
 }
@@ -277,11 +277,13 @@ button { font: inherit; color: inherit; }
 .m-ic { width: 40px; height: 40px; border-radius: 12px; display: grid; place-items: center; background: var(--surface-2); border: 1px solid var(--border); transition: .2s; }
 .model-card.on .m-ic { background: var(--grad); border-color: transparent; box-shadow: 0 6px 18px -6px rgba(124,58,237,.9); }
 .m-ic svg { width: 20px; height: 20px; fill: none; stroke: #fff; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.m-name { font-weight: 650; font-size: 13.5px; display: flex; align-items: center; gap: 7px; }
-.m-tag { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 99px; background: rgba(34,211,238,.14); color: var(--cyan); letter-spacing: .2px; }
-.m-sub { color: var(--muted); font-size: 12px; margin-top: 1px; }
+.m-name { font-weight: 650; font-size: 13.5px; display: flex; align-items: center; gap: 7px; white-space: nowrap; }
+.m-tag { font-size: 9.5px; font-weight: 700; padding: 2px 7px; white-space: nowrap; border-radius: 99px; background: rgba(34,211,238,.14); color: var(--cyan); letter-spacing: .2px; }
+.m-sub { display: block; color: var(--muted); font-size: 12px; margin-top: 1px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .meters { display: flex; flex-direction: column; gap: 5px; align-items: flex-end; }
-.meter { display: flex; align-items: center; gap: 6px; font-size: 10px; color: var(--muted-2); text-transform: uppercase; letter-spacing: .4px; }
+.meter { display: flex; align-items: center; gap: 5px; color: var(--muted-2); }
+.meter svg { width: 11px; height: 11px; fill: var(--cyan); opacity: .8; }
+.meter.q svg { fill: var(--violet-2); }
 .meter i { display: flex; gap: 2px; }
 .meter i b { width: 5px; height: 9px; border-radius: 2px; background: rgba(255,255,255,.1); }
 .meter i b.f { background: var(--cyan); box-shadow: 0 0 6px rgba(34,211,238,.6); }

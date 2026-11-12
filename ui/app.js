@@ -66,8 +66,8 @@ function buildModels(models) {
         <span class="m-sub">${esc(m.sub)}</span>
       </span>
       <span class="meters">
-        <span class="meter">Vitesse <i>${meter(m.speed)}</i></span>
-        <span class="meter q">Qualité <i>${meter(m.quality)}</i></span>
+        <span class="meter" title="Vitesse"><svg viewBox="0 0 24 24"><path d="M13 2L4 14h7l-1 8 9-12h-7z"/></svg><i>${meter(m.speed)}</i></span>
+        <span class="meter q" title="Qualité"><svg viewBox="0 0 24 24"><path d="M12 2l3.1 6.3 6.9 1-5 4.9 1.2 6.8L12 17.8 5.8 21l1.2-6.8-5-4.9 6.9-1z"/></svg><i>${meter(m.quality)}</i></span>
       </span>
     </button>`).join('');
   $$('.model-card', box).forEach((el) => el.addEventListener('click', () => setSetting('model', el.dataset.k)));
