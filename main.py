@@ -284,7 +284,7 @@ def selftest(report_path: str) -> int:
                 app = os.path.join(tmp, "App.exe")
                 shutil.copy2(sys.executable, app)
                 proc = subprocess.Popen([app, "--idle", "60"], env=updater._clean_env())
-                time.sleep(5)
+                time.sleep(8)
                 if proc.poll() is not None:
                     raise RuntimeError("la copie de test ne tourne pas")
                 shutil.copy2(sys.executable, app + ".new")

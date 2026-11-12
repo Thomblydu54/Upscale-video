@@ -21,6 +21,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 import urllib.request
 import zipfile
 from typing import Callable, Optional
@@ -146,13 +147,26 @@ def swap_executable(new_file: str, target: str) -> str:
             os.remove(old)
         except OSError:
             old = target + f".{os.getpid()}.old"
-    os.replace(target, old)          # autorisé même si l'exe tourne
+    _replace_retry(target, old)          # autorisé même si l'exe tourne
     try:
-        os.replace(new_file, target)
+        _replace_retry(new_file, target)
     except BaseException:
-        os.replace(old, target)      # retour arrière
+        _replace_retry(old, target)      # retour arrière
         raise
     return old
+
+
+def _replace_retry(src: str, dst: str, attempts: int = 20) -> None:
+    """os.replace avec nouvelles tentatives : un antivirus (ou Windows lui-même, pendant le
+    démarrage de l'exe) peut garder le fichier ouvert quelques secondes."""
+    for i in range(attempts):
+        try:
+            os.replace(src, dst)
+            return
+        except PermissionError:
+            if i == attempts - 1:
+                raise
+            time.sleep(0.5)
 
 
 def cleanup_old_versions() -> None:
