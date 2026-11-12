@@ -167,7 +167,7 @@ function updateSizeHint() {
   // exemples adaptés à la première vidéo
   const base = v ? v.fps : 30;
   $$('#interpolation button').forEach((b) => {
-    const m = { x2: 2, x3: 3 }[b.dataset.v];
+    const m = { x2: 2, x3: 3, x4: 4 }[b.dataset.v];
     if (m) $('small', b).textContent = `${fmtFps(base * m)} i/s`;
   });
 }

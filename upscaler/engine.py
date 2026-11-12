@@ -73,9 +73,9 @@ OUTPUT_SIZES: list[tuple[str, str]] = [
 # Interpolation d'images (RIFE) : multiplie le nombre d'images par seconde
 INTERPOLATIONS: list[tuple[str, str]] = [
     ("off", "Désactivée"),
-    ("x2", "x2 – deux fois plus fluide (ex. 30 → 60 i/s)"),
+    ("x2", "x2 – deux fois plus fluide (ex. 30 → 60 i/s, idéal écran 60 Hz)"),
     ("x3", "x3 (ex. 24 → 72 i/s)"),
-    ("x4", "x4 – ralenti fluide (ex. 30 → 120 i/s)"),
+    ("x4", "x4 (ex. 30 → 120 i/s, pour écran 120 / 144 Hz)"),
 ]
 RIFE_BIN = "rife-ncnn-vulkan"
 RIFE_MODEL = "rife-v4.6"
