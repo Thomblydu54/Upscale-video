@@ -68,6 +68,8 @@ jobs:
         run: |
           $p = Start-Process -FilePath "dist/onefile/UpscaleVideoAI.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
           Get-Content selftest.txt
+          $summary = (Get-Content selftest.txt | Where-Object { $_ -match "^(OK|INFO|FAIL|SELFTEST)" }) -join " | "
+          Write-Output "::notice title=selftest::$summary"
           if ($p.ExitCode -ne 0) {
             $fails = (Get-Content selftest.txt | Where-Object { $_ -like "FAIL*" }) -join " | "
             Write-Output "::error title=selftest::$fails"
