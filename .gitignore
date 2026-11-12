@@ -1,0 +1,10 @@
+# outils téléchargés par scripts/fetch_tools.py
+bin/
+# artefacts PyInstaller
+build/
+dist/
+*.spec.bak
+__pycache__/
+*.pyc
+.venv/
+venv/
