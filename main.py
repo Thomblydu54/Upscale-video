@@ -27,6 +27,15 @@ def write_crash_log(text: str) -> str:
     folder = os.path.join(base, "UpscaleVideoAI")
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "erreurs.log")
+    try:  # le journal des erreurs ne grossit jamais au-delà de ~1 Mo
+        if os.path.getsize(path) > 1_000_000:
+            with open(path, "rb") as f:
+                f.seek(-200_000, os.SEEK_END)
+                tail = f.read()
+            with open(path, "wb") as f:
+                f.write(b"[...anciennes erreurs supprimees...]\n" + tail)
+    except OSError:
+        pass
     with open(path, "a", encoding="utf-8") as f:
         f.write(time.strftime("\n===== %Y-%m-%d %H:%M:%S =====\n") + text + "\n")
     return path
@@ -213,6 +222,29 @@ def selftest(report_path: str) -> int:
         return f"pause après {done} images source, reprise → {video[0]} + audio"
 
     check("pause et reprise", pause_resume)
+
+    # --- nettoyage des fichiers temporaires laissés par une session interrompue
+    def cleanup_check():
+        from upscaler import cleanup
+        root = tempfile.mkdtemp(prefix="cleanup_test_")
+        dead = subprocess.Popen([tools.find_tool("ffmpeg"), "-version"], stdout=subprocess.DEVNULL)
+        dead.wait()
+        orphan = os.path.join(root, "upv_orphelin")
+        os.makedirs(orphan)
+        with open(os.path.join(orphan, "upv.pid"), "w") as f:
+            f.write(str(dead.pid))
+        with open(os.path.join(orphan, "img.png"), "wb") as f:
+            f.write(b"0" * 1000)
+        mine = tools.make_work_dir("upv_", root)
+        freed = cleanup.clean_work_dirs([root])
+        if os.path.exists(orphan) or not os.path.isdir(mine) or freed < 1000:
+            raise RuntimeError(f"orphelin supprimé={not os.path.exists(orphan)}, "
+                               f"dossier actif gardé={os.path.isdir(mine)}, libéré={freed}")
+        if not cleanup._pid_alive(os.getpid()) or cleanup._pid_alive(dead.pid):
+            raise RuntimeError("détection des processus incorrecte")
+        return "dossier orphelin supprimé, dossier en cours conservé"
+
+    check("nettoyage automatique", cleanup_check)
 
     def frame_grab():
         tmp = tempfile.mkdtemp(prefix="upv_selftest_")

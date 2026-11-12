@@ -154,12 +154,32 @@ def make_png(width: int, height: int, rgb=(128, 128, 128)) -> bytes:
 _GPU_RE = re.compile(r"^\[(\d+)\s+(.+?)\]\s+queueC", re.M)
 
 
+OWNER_FILE = "upv.pid"
+
+
+def make_work_dir(prefix: str, dir: str | None = None) -> str:
+    """Crée un dossier de travail temporaire marqué avec le PID de l'application.
+
+    Le marqueur permet au nettoyage du démarrage de supprimer sans risque les dossiers
+    laissés par une session interrompue (plantage, arrêt du PC), jamais ceux d'une
+    application encore ouverte."""
+    if dir:
+        os.makedirs(dir, exist_ok=True)
+    path = tempfile.mkdtemp(prefix=prefix, dir=dir or None)
+    try:
+        with open(os.path.join(path, OWNER_FILE), "w", encoding="ascii") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+    return path
+
+
 def detect_gpus() -> tuple[list[tuple[int, str]], str]:
     """Lance realesrgan sur une image minuscule pour lister les GPU Vulkan.
 
     Retourne (liste [(index, nom)], sortie brute)."""
     exe = find_tool(UPSCALER_BIN)
-    tmp = tempfile.mkdtemp(prefix="upv_gpu_")
+    tmp = make_work_dir("upv_gpu_")
     try:
         src = os.path.join(tmp, "in.png")
         dst = os.path.join(tmp, "out.png")

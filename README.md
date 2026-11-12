@@ -59,6 +59,11 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 - **Abandonner** supprime l'avancement enregistré des traitements en pause.
 - L'avancement est conservé dans `%LOCALAPPDATA%\UpscaleVideoAI\jobs`, ou dans le *dossier temporaire* choisi dans les réglages avancés. Il est supprimé automatiquement à la fin.
 
+### Aucun fichier ne s'accumule
+- Pendant un traitement, chaque lot d'images est supprimé dès qu'il est encodé. À la fin, tous les fichiers de travail sont supprimés.
+- Au démarrage, l'application supprime ce qu'une session interrompue (plantage, coupure de courant) a pu laisser : images temporaires, avancement de traitements qui n'existent plus, fichiers décompressés de l'exe, aperçus de plus de 24 h, mises à jour non installées. Ce qui appartient à une fenêtre encore ouverte n'est jamais supprimé.
+- Seuls les traitements **en pause** gardent leurs données, jusqu'à leur fin ou jusqu'à « Abandonner ».
+
 ### Ce que l'application gère toute seule
 - La **piste audio** est conservée telle quelle (ou convertie en AAC si le format MP4 ne l'accepte pas). Toutes les pistes audio sont gardées.
 - Les **sous-titres** sont conservés : tous en MKV, les sous-titres texte en MP4.

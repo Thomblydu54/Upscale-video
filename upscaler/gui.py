@@ -107,6 +107,8 @@ class App:
         root.after(100, self._poll_events)
         threading.Thread(target=self._detect_gpus, daemon=True).start()
         self._restore_jobs()
+        threading.Thread(target=self._cleanup, args=(self._collect_settings().temp_dir,),
+                         daemon=True).start()
 
     # ------------------------------------------------------------------ apparence
     def _set_icon(self):
@@ -489,6 +491,17 @@ class App:
         self.btn_cancel.configure(state="normal" if running else "disabled")
         self.btn_pause.configure(state="normal" if running else "disabled")
         tools.keep_awake(running)
+
+    def _cleanup(self, temp_dir: str):
+        try:
+            from . import cleanup, updater
+            updater.cleanup_old_versions()
+            dirs = {temp_dir} | {
+                f["job"].data["settings"].get("temp_dir", "") for f in self.files if f.get("job")}
+            cleanup.startup_cleanup(dirs, self.jobs.known_ids,
+                                    lambda m: self.events.put(("log", m)))
+        except Exception:  # noqa: BLE001
+            pass
 
     def _restore_jobs(self):
         """Recharge les traitements en pause / interrompus et les reprend automatiquement."""

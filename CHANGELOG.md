@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.4.1
+- **Nettoyage automatique au démarrage** : les fichiers temporaires restés après un plantage, une fermeture forcée ou une coupure de courant sont supprimés. Cela comprend les images des lots en cours (parfois plusieurs Go), l'avancement de traitements qui n'existent plus, les fichiers décompressés de l'exe (~300 Mo par session interrompue), les aperçus de plus de 24 h et les mises à jour non installées. Les fichiers d'une application encore ouverte ne sont jamais touchés.
+- Abandonner ou retirer un traitement en pause supprime aussi la vidéo finale à moitié assemblée, s'il y en a une.
+- Le journal des erreurs est limité à 1 Mo.
+
 ## v1.4.0
 - **Pause et reprise** : le bouton « Pause » enregistre l'avancement. On peut alors fermer l'application ou éteindre le PC : au prochain lancement, le traitement **reprend tout seul à l'image exacte** où il s'était arrêté, sans image perdue ou doublée et avec le son synchronisé.
 - Fermer la fenêtre pendant un traitement le met d'abord en pause proprement. Après une coupure de courant ou un plantage, la reprise se fait depuis le dernier morceau enregistré.

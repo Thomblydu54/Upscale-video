@@ -992,7 +992,7 @@ class Upscaler:
 
         persistent = job_dir is not None
         if not persistent:
-            job_dir = tempfile.mkdtemp(prefix="upv_job_", dir=settings.temp_dir or None)
+            job_dir = tools.make_work_dir("upv_job_", settings.temp_dir or None)
         os.makedirs(job_dir, exist_ok=True)
         state = self._check_state(state if state is not None else {}, job_dir, plan)
         self._state, self._job_dir = state, job_dir
@@ -1000,7 +1000,7 @@ class Upscaler:
         self._samples, self._t_start, self._last_report = collections.deque(), time.monotonic(), 0.0
         self._total = max(1, info.frames * plan.interp)
 
-        work = tempfile.mkdtemp(prefix="upv_", dir=settings.temp_dir or None)
+        work = tools.make_work_dir("upv_", settings.temp_dir or None)
         finished = False
         try:
             free = shutil.disk_usage(work).free
@@ -1519,7 +1519,7 @@ class Upscaler:
         self._t_start = time.monotonic()
         self._report(0, "IA", force=True)
         ffmpeg = tools.find_tool("ffmpeg")
-        work = tempfile.mkdtemp(prefix="upv_img_", dir=settings.temp_dir or None)
+        work = tools.make_work_dir("upv_img_", settings.temp_dir or None)
         try:
             src = os.path.join(work, "source.png")
             ai = os.path.join(work, "ia.png")

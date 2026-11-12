@@ -162,7 +162,7 @@ def cleanup_old_versions() -> None:
     folder = os.path.dirname(sys.executable)
     base = os.path.basename(sys.executable)
     for name in os.listdir(folder):
-        if name.startswith(base + ".") and name.endswith(".old"):
+        if name.startswith(base + ".") and name.endswith((".old", ".new", ".new.part")):
             try:
                 os.remove(os.path.join(folder, name))
             except OSError:

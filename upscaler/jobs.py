@@ -106,10 +106,20 @@ class JobStore:
         with self._lock:
             shutil.rmtree(job.work, ignore_errors=True)
             shutil.rmtree(job.folder, ignore_errors=True)
+            try:  # vidéo finale à moitié assemblée (arrêt pendant l'assemblage)
+                os.remove(job.output + ".partiel")
+            except OSError:
+                pass
             try:  # dossier parent « UpscaleVideoAI-reprise » vide
                 os.rmdir(os.path.dirname(job.work))
             except OSError:
                 pass
+
+    def known_ids(self) -> set:
+        try:
+            return {n for n in os.listdir(jobs_root()) if os.path.isdir(os.path.join(jobs_root(), n))}
+        except OSError:
+            return set()
 
     def load_pending(self) -> list[Job]:
         """Traitements à reprendre, dans l'ordre où ils ont été lancés."""
@@ -130,6 +140,8 @@ class JobStore:
             if data and data.get("status") in PENDING and data.get("path") and data.get("settings"):
                 jobs.append(Job(data))
             else:  # traitement terminé / annulé, ou dossier orphelin
+                if data and data.get("work") and data.get("output"):
+                    self.delete(Job(dict(data, id=name)))
                 shutil.rmtree(folder, ignore_errors=True)
         jobs.sort(key=lambda j: (j.data.get("created", 0), j.id))
         return jobs

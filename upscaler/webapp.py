@@ -14,7 +14,7 @@ import traceback
 
 from concurrent.futures import ThreadPoolExecutor
 
-from . import __version__, engine, tools, updater
+from . import __version__, cleanup, engine, tools, updater
 from .jobs import JobStore
 from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, OUTPUT_SIZES,
                      SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time, fmt_time_ms)
@@ -616,6 +616,7 @@ class Api:
             updater.cleanup_old_versions()
         except Exception:
             pass
+        self._cleanup()
         self._auto_resume()
         if self._settings.auto_update:
             time.sleep(4)
@@ -686,6 +687,17 @@ class Api:
             threading.Thread(target=self._probe, args=(fid,), daemon=True).start()
         if pending:
             self._log(f"{len(pending)} traitement(s) en pause retrouvé(s) : reprise automatique.")
+
+    def _cleanup(self) -> None:
+        """Supprime les fichiers temporaires laissés par une session interrompue."""
+        try:
+            with self._lock:
+                temp_dirs = {self._settings.temp_dir} | {
+                    f["job"].data["settings"].get("temp_dir", "") for f in self._files.values()
+                    if f.get("job")}
+            cleanup.startup_cleanup(temp_dirs, self._jobs.known_ids, self._log)
+        except Exception as e:  # noqa: BLE001
+            self._log(f"Nettoyage : {e}")
 
     def _auto_resume(self) -> None:
         if not self._restored:
