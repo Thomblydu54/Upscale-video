@@ -43,7 +43,10 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    | Animation / Anime – Rapide | dessins animés, anime | ⚡⚡⚡⚡ |
    | Animation / Anime – Haute qualité | anime, rendu plus net | ⚡ |
 3. **Choisissez la résolution de sortie** : x2, x3, x4, 720p, 1080p, 1440p, 4K ou 8K.
-4. Cliquez sur **Aperçu IA**, ou double-cliquez sur une vidéo, pour tester sur une seule image. Le comparateur avant / après s'ouvre ensuite.
+4. Cliquez sur **Aperçu IA**, ou sur « Aperçu » sur une carte vidéo, puis **choisissez l'image** à tester :
+   - glissez sur la pellicule, ou utilisez ← → (image par image) et Maj + ← → (±1 seconde) ;
+   - saisissez un temps exact (ex. `1:23`), ou tirez une image au hasard ;
+   - cliquez enfin sur **Améliorer cette image avec l'IA**. Le comparateur avant / après s'ouvre, et « Changer d'image » permet d'en essayer une autre.
 5. Cliquez sur **Lancer l'upscale**. La vidéo finale est enregistrée à côté de l'originale, sous le nom `nom_upscaled_3840x2160.mp4`.
 
 ### Ce que l'application gère toute seule
@@ -56,6 +59,11 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 - **Espace disque limité** : les images sont traitées par lots, puis supprimées au fur et à mesure.
 - Le PC ne se met pas en veille pendant un traitement.
 - Encodage **H.264 ou H.265** : sur le processeur (CPU), ou accéléré par la carte graphique (NVIDIA NVENC, AMD AMF, Intel QSV).
+
+### Mises à jour automatiques
+Au démarrage, l'application vérifie si une nouvelle version est disponible sur GitHub. Si c'est le cas, une bannière propose **Mettre à jour**. La nouvelle version est alors téléchargée, son intégrité est vérifiée (SHA-256), puis elle est installée et l'application redémarre toute seule. Vous pouvez désactiver cette vérification dans *Réglages avancés*. Un clic sur le numéro de version lance une vérification manuelle.
+
+> Si l'exe se trouve dans un dossier protégé (comme `C:\Program Files`), l'installation automatique est impossible. Placez-le plutôt sur le Bureau ou dans `Documents`.
 
 ### En cas de problème
 - **« Aucune carte graphique compatible Vulkan »** : mettez à jour les pilotes de votre carte graphique.
@@ -85,7 +93,12 @@ pyinstaller --onefile --windowed --name UpscaleVideoAI --icon assets/icon.ico ^
   --collect-data sv_ttk --collect-all tkinterdnd2 main.py
 ```
 
-L'exe se trouve ensuite dans `dist/`. En développement, `python main.py` lance l'interface directement.
+L'exe se trouve ensuite dans `dist/`.
+
+### Publier une nouvelle version (mise à jour automatique)
+1. Augmentez `__version__` dans `upscaler/__init__.py` (ex. `1.2.0` → `1.3.0`).
+2. Ajoutez une section `## v1.3.0` dans `CHANGELOG.md`. Elle sert de « Nouveautés » dans l'application.
+3. Poussez sur `main`, ou ajoutez `[release]` dans le message de commit. GitHub Actions compile l'exe, le teste et publie la release, que les applications installées détectent ensuite toutes seules. En développement, `python main.py` lance l'interface directement.
 
 ## Crédits et licences
 - Real-ESRGAN : © Xintao Wang, licence BSD-3-Clause

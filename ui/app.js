@@ -39,6 +39,7 @@ async function boot() {
   const init = await API.init();
   S.models = init.models;
   S.settings = init.settings;
+  S.version = init.version;
   $('#version').textContent = 'v' + init.version + (S.demo ? ' · démo' : '');
   buildModels(init.models);
   buildSizes(init.sizes);
@@ -123,6 +124,7 @@ function applySettings() {
   segSet('#deinterlace', st.deinterlace);
   $('#tile').value = String(st.tile ?? 0);
   $('#tta').checked = !!st.tta;
+  $('#autoUpdate').checked = st.auto_update !== false;
   const gsel = $('#gpu');
   gsel.value = String(st.gpu ?? 'auto');
   if (!gsel.value) gsel.value = 'auto';
@@ -166,13 +168,19 @@ function bindUi() {
   $('#clearBtn').addEventListener('click', async () => { await API.clear_files(); });
   $('#startBtn').addEventListener('click', () => API.start());
   $('#cancelBtn').addEventListener('click', () => API.cancel());
-  $('#previewBtn').addEventListener('click', () => API.preview(null));
+  $('#previewBtn').addEventListener('click', () => {
+    const f = S.files.find((x) => x.state !== 'probing' && x.state !== 'error' && x.res) || S.files.find((x) => x.res);
+    if (!f) { toast('info', 'Aucune vidéo', 'Ajoutez une vidéo pour générer un aperçu.'); return; }
+    openPicker(f.id);
+  });
   $('#quality').addEventListener('input', updateRange);
   $('#quality').addEventListener('change', (e) => setSetting('quality', 30 - Number(e.target.value)));
   $('#encoder').addEventListener('change', (e) => setSetting('encoder', e.target.value));
   $('#gpu').addEventListener('change', (e) => setSetting('gpu', e.target.value));
   $('#tile').addEventListener('change', (e) => setSetting('tile', Number(e.target.value)));
   $('#tta').addEventListener('change', (e) => setSetting('tta', e.target.checked));
+  $('#autoUpdate').addEventListener('change', (e) => setSetting('auto_update', e.target.checked));
+  $('#version').addEventListener('click', () => API.check_update(true));
   for (const [sel, key] of [['#container', 'container'], ['#speed', 'speed'], ['#deinterlace', 'deinterlace']]) {
     $$(sel + ' button').forEach((b) => b.addEventListener('click', () => setSetting(key, b.dataset.v)));
   }
@@ -200,16 +208,51 @@ function bindUi() {
   // modales
   $('#pvClose').addEventListener('click', closePreview);
   $('#errClose').addEventListener('click', () => ($('#errorModal').hidden = true));
+  $('#notesClose').addEventListener('click', () => ($('#notesModal').hidden = true));
   $('#pvStart').addEventListener('click', () => { closePreview(); API.start(); });
+  $('#pvBack').addEventListener('click', () => setPvMode('pick'));
+  $('#pkGo').addEventListener('click', generatePreview);
   $$('#pvZoom button').forEach((b) => b.addEventListener('click', () => {
     $$('#pvZoom button').forEach((x) => x.classList.toggle('on', x === b));
     cmpZoom(b.dataset.z);
   }));
+  $('#pkRange').addEventListener('input', (e) => pickFrame(Number(e.target.value), true));
+  $('#pkRange').addEventListener('change', (e) => pickFrame(Number(e.target.value), false));
+  $$('.tl-btn').forEach((b) => b.addEventListener('click', () => stepFrame(b.dataset.step)));
+  $('#pkGoto').addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      const t = parseClock(e.target.value);
+      if (t == null) { toast('warn', 'Temps invalide', 'Exemples : 83, 1:23, 00:01:23.5'); return; }
+      pickFrame(Math.round(t * PK.fps), false);
+      e.target.blur();
+    }
+  });
+  // mises à jour
+  $('#ubClose').addEventListener('click', () => ($('#updateBanner').hidden = true));
+  $('#ubNotes').addEventListener('click', showNotes);
+  $('#ubInstall').addEventListener('click', async () => {
+    if (S.update && !S.update.can_install) { API.open_url(S.update.page); return; }
+    const ok = await API.install_update();
+    if (ok) {
+      $('#ubInstall').disabled = true; $('#ubNotes').hidden = true; $('#ubClose').hidden = true;
+      $('#ubBar').hidden = false;
+      $('#ubTitle').textContent = `Téléchargement de la version ${S.update.version}…`;
+    }
+  });
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#errorModal').hidden) $('#errorModal').hidden = true;
+      else if (!$('#notesModal').hidden) $('#notesModal').hidden = true;
       else if (!$('#previewModal').hidden) closePreview();
       else $('#logDrawer').classList.remove('open');
+    }
+    if (!$('#previewModal').hidden && PK.mode === 'pick' && document.activeElement?.id !== 'pkGoto') {
+      if (e.key === 'ArrowRight') { e.preventDefault(); stepFrame(e.shiftKey ? '+1s' : '+1'); }
+      if (e.key === 'ArrowLeft') { e.preventDefault(); stepFrame(e.shiftKey ? '-1s' : '-1'); }
+      if (e.key === 'PageUp') { e.preventDefault(); stepFrame('-10s'); }
+      if (e.key === 'PageDown') { e.preventDefault(); stepFrame('+10s'); }
+      if (e.key === 'Enter') { e.preventDefault(); generatePreview(); }
     }
     if (e.ctrlKey && e.key.toLowerCase() === 'o') { e.preventDefault(); pickFiles(); }
   });
@@ -226,7 +269,7 @@ function bindUi() {
   });
 
   initCompare();
-  window.addEventListener('resize', () => { if (!$('#previewModal').hidden) cmpZoom(CMP.mode); });
+  window.addEventListener('resize', () => { if (!$('#previewModal').hidden && PK.mode === 'compare') cmpZoom(CMP.mode === 'custom' ? 'fit' : CMP.mode); });
 }
 
 async function pickFiles() {
@@ -253,7 +296,28 @@ function handleEvent(ev) {
     case 'gpus': setGpus(ev.gpus); break;
     case 'thumb': if (ev.thumb) { S.thumbs.set(ev.id, ev.thumb); const el = cardEls.get(ev.id); if (el) setThumb(el, ev.thumb); } break;
     case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled) confetti(); break;
-    case 'preview_started': openPreview(ev.name); break;
+    case 'preview_started': onPreviewStarted(ev); break;
+    case 'update': showUpdate(ev); break;
+    case 'update_progress': {
+      const pct = Math.round((ev.fraction || 0) * 100);
+      $('#ubBar').hidden = false;
+      $('#ubFill').style.width = pct + '%';
+      $('#ubSub').textContent = `${pct} % · ${fmtSize(ev.done)} / ${fmtSize(ev.total)}`;
+      break;
+    }
+    case 'update_ready':
+      $('#ubTitle').textContent = `Installation de la version ${ev.version}…`;
+      $('#ubSub').textContent = "L'application va redémarrer automatiquement.";
+      $('#ubFill').style.width = '100%';
+      break;
+    case 'update_failed':
+      $('#ubInstall').disabled = false; $('#ubNotes').hidden = false; $('#ubClose').hidden = false;
+      $('#ubBar').hidden = true;
+      $('#ubTitle').textContent = 'La mise à jour a échoué';
+      $('#ubSub').textContent = ev.error || '';
+      $('#ubInstall').textContent = 'Télécharger manuellement';
+      S.update = { ...(S.update || {}), can_install: false, page: ev.page };
+      break;
     case 'preview_done': showPreview(ev); break;
     case 'preview_failed':
       closePreview();
@@ -289,6 +353,7 @@ function createCard(f) {
       <img alt="">
       <div class="res-badge"><span class="from"></span><svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"/></svg><span class="to"></span></div>
       <div class="dur-badge"></div>
+      <button class="card-eye" title="Choisir une image et voir le résultat de l'IA"><svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>Aperçu</button>
       <button class="card-x" title="Retirer">×</button>
       <div class="overlay">
         <div class="ring"><svg viewBox="0 0 74 74"><circle class="track" cx="37" cy="37" r="32"/><circle class="val" cx="37" cy="37" r="32"/></svg><span>0%</span></div>
@@ -307,14 +372,15 @@ function createCard(f) {
   const img = $('img', el);
   img.addEventListener('load', () => { img.classList.add('loaded'); $('.shimmer', el)?.remove(); });
   $('.card-x', el).addEventListener('click', async (e) => { e.stopPropagation(); await API.remove_file(f.id); });
+  $('.card-eye', el).addEventListener('click', (e) => { e.stopPropagation(); if (!S.running) openPicker(f.id); });
   $('.play', el).addEventListener('click', () => API.play(f.id));
   $('.folder', el).addEventListener('click', () => API.open_output(f.id));
   $('.pill', el).addEventListener('click', () => {
     const cur = S.files.find((x) => x.id === f.id);
     if (cur && cur.error) showError(cur.name, cur.error);
   });
-  el.addEventListener('dblclick', () => { if (!S.running) API.preview(f.id); });
-  el.title = 'Double-clic : aperçu IA de cette vidéo';
+  el.addEventListener('dblclick', () => { if (!S.running) openPicker(f.id); });
+  el.title = 'Double-clic : choisir une image et voir le résultat de l\'IA';
   const t = S.thumbs.get(f.id);
   if (t) setThumb(el, t);
   return el;
@@ -425,23 +491,119 @@ function showError(title, text) {
 
 /* ------------------------------------------------------------------ comparateur */
 const CMP = { x: 0.5, scale: 1, tx: 0, ty: 0, w: 1, h: 1, mode: 'fit', fit: 1 };
+const PK = { fid: null, frames: 1, fps: 25, index: 0, seq: 0, mode: 'pick', remember: new Map(), timer: null };
 
-function openPreview(name) {
-  $('#pvName').textContent = '· ' + (name || '');
-  $('#pvChips').innerHTML = '';
+function setPvMode(mode) {
+  PK.mode = mode;
+  const card = $('#pvCard');
+  card.classList.toggle('mode-pick', mode === 'pick');
+  card.classList.toggle('mode-compare', mode === 'compare');
+  $('#pvTitle').textContent = mode === 'pick' ? "Choisir l'image à prévisualiser" : 'Aperçu IA';
+  if (mode === 'compare') requestAnimationFrame(() => cmpZoom(CMP.mode === 'custom' ? 'fit' : CMP.mode));
+}
+
+async function openPicker(fid) {
+  const info = await API.frame_info(fid);
+  if (!info || !info.frames) { toast('warn', 'Vidéo pas encore analysée', 'Patientez une seconde puis réessayez.'); return; }
+  PK.fid = fid; PK.frames = info.frames; PK.fps = info.fps || 25;
+  $('#pvName').textContent = '· ' + info.name;
+  $('#pvChips').innerHTML = `<span>${esc(info.res)}</span><span class="hl">→ ${esc(info.out)}</span>`;
+  $('#pkRange').max = Math.max(0, info.frames - 1);
+  $('#pkImg').removeAttribute('src');
+  $('#previewModal').hidden = false;
+  setPvMode('pick');
+  // pellicule
+  const strip = $('#filmstrip');
+  strip.innerHTML = Array.from({ length: 12 }, () => '<div class="ph"></div>').join('');
+  const start = PK.remember.has(fid) ? PK.remember.get(fid) : Math.floor(info.frames * 0.35);
+  pickFrame(start, false);
+  const thumbs = await API.get_filmstrip(fid, 12);
+  if (PK.fid !== fid) return;
+  strip.innerHTML = '';
+  thumbs.forEach((t) => {
+    const d = document.createElement('div');
+    if (t.data) d.style.backgroundImage = `url("${t.data}")`;
+    strip.appendChild(d);
+  });
+}
+
+function frameLabel(index) {
+  const t = index / PK.fps;
+  const h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${sec.toFixed(2).padStart(5, '0')}`;
+}
+
+function pickFrame(index, fast) {
+  index = Math.max(0, Math.min(PK.frames - 1, Math.round(index)));
+  PK.index = index;
+  PK.remember.set(PK.fid, index);
+  $('#pkRange').value = index;
+  const label = `Image ${(index + 1).toLocaleString('fr-FR')} / ${PK.frames.toLocaleString('fr-FR')}`;
+  $('#pkFrame').textContent = label;
+  $('#pkFrameBig').textContent = `Image ${(index + 1).toLocaleString('fr-FR')}`;
+  $('#pkClock').textContent = $('#pkClockBig').textContent = frameLabel(index);
+  clearTimeout(PK.timer);
+  PK.timer = setTimeout(() => loadFrame(index, fast ? 720 : 1600), fast ? 70 : 0);
+}
+
+async function loadFrame(index, width) {
+  const seq = ++PK.seq;
+  const fid = PK.fid;
+  $('#pkLoading').classList.add('show');
+  try {
+    const r = await API.get_frame(fid, index, width);
+    if (seq !== PK.seq || fid !== PK.fid) return; // une requête plus récente est en cours
+    if (r && r.data) $('#pkImg').src = r.data;
+    else if (r && r.error) toast('error', "Impossible d'afficher cette image", r.error);
+  } finally {
+    if (seq === PK.seq) $('#pkLoading').classList.remove('show');
+  }
+}
+
+function stepFrame(step) {
+  const fps = PK.fps;
+  const map = { '-1': -1, '+1': 1, '-1s': -Math.round(fps), '+1s': Math.round(fps), '-10s': -Math.round(fps * 10), '+10s': Math.round(fps * 10) };
+  if (step === 'random') pickFrame(Math.floor(Math.random() * PK.frames), false);
+  else pickFrame(PK.index + (map[step] || 0), false);
+}
+
+function parseClock(text) {
+  const t = String(text || '').trim().replace(',', '.');
+  if (!t) return null;
+  const parts = t.split(':').map(Number);
+  if (parts.some((n) => Number.isNaN(n) || n < 0) || parts.length > 3) return null;
+  return parts.reduce((acc, n) => acc * 60 + n, 0);
+}
+
+function generatePreview() {
+  if (S.running) { toast('info', 'Patientez', 'Un traitement est déjà en cours.'); return; }
+  $('#pvLoadingSub').textContent = `Agrandissement de l'image ${PK.index + 1} (${frameLabel(PK.index)})`;
   $('#pvLoading').hidden = false;
   $('#pvAfter').removeAttribute('src');
   $('#pvBefore').removeAttribute('src');
-  $('#previewModal').hidden = false;
+  setPvMode('compare');
+  API.preview(PK.fid, PK.index);
 }
 
-function closePreview() { $('#previewModal').hidden = true; }
+function onPreviewStarted(ev) {
+  if ($('#previewModal').hidden) {
+    $('#pvName').textContent = '· ' + (ev.name || '');
+    $('#previewModal').hidden = false;
+  }
+  $('#pvLoading').hidden = false;
+  if (ev.time) $('#pvLoadingSub').textContent = `Agrandissement de l'image ${ev.index + 1} (${ev.time})`;
+  setPvMode('compare');
+}
+
+function closePreview() { $('#previewModal').hidden = true; PK.seq++; }
 
 function showPreview(ev) {
-  if ($('#previewModal').hidden) openPreview(ev.name);
+  if ($('#previewModal').hidden) { $('#previewModal').hidden = false; $('#pvName').textContent = '· ' + (ev.name || ''); }
+  setPvMode('compare');
   const model = S.models.find((m) => m.key === ev.model);
   $('#pvModel').textContent = model ? model.name : '';
-  $('#pvChips').innerHTML = `<span>${esc(ev.source)}</span><span class="hl">→ ${esc(ev.output)}</span><span>${esc(model ? model.name : ev.model)}</span>`;
+  $('#pvChips').innerHTML = `<span>${esc(ev.source)}</span><span class="hl">→ ${esc(ev.output)}</span>` +
+    `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.time ? `<span>Image ${ev.index + 1} · ${esc(ev.time)}</span>` : '');
   CMP.w = ev.width; CMP.h = ev.height; CMP.x = 0.5;
   let loaded = 0;
   const done = () => { if (++loaded === 2) { $('#pvLoading').hidden = true; cmpZoom('fit'); } };
@@ -449,6 +611,41 @@ function showPreview(ev) {
   $('#pvAfter').src = ev.after;
   $('#pvBefore').src = ev.before;
   $$('#pvZoom button').forEach((x) => x.classList.toggle('on', x.dataset.z === 'fit'));
+}
+
+/* ------------------------------------------------------------------ mises à jour */
+function showUpdate(info) {
+  S.update = info;
+  $('#ubTitle').textContent = `Nouvelle version ${info.version} disponible`;
+  $('#ubSub').textContent = `Vous utilisez la version ${info.current}` + (info.size ? ` · ${fmtSize(info.size)}` : '');
+  $('#ubInstall').textContent = info.can_install ? 'Mettre à jour' : 'Télécharger';
+  $('#ubInstall').disabled = false;
+  $('#ubNotes').hidden = !info.notes;
+  $('#ubClose').hidden = false;
+  $('#ubBar').hidden = true;
+  $('#updateBanner').hidden = false;
+}
+
+function mdToHtml(md) {
+  const out = [];
+  let inList = false;
+  for (const raw of String(md || '').split(/\r?\n/)) {
+    const line = raw.trim();
+    const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>').replace(/`(.+?)`/g, '<code>$1</code>');
+    if (/^[-*] /.test(line)) { if (!inList) { out.push('<ul>'); inList = true; } out.push(`<li>${inline(line.slice(2))}</li>`); continue; }
+    if (inList) { out.push('</ul>'); inList = false; }
+    if (/^#{1,6} /.test(line)) out.push(`<h3>${inline(line.replace(/^#+ /, ''))}</h3>`);
+    else if (line) out.push(`<p>${inline(line)}</p>`);
+  }
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+function showNotes() {
+  if (!S.update) return;
+  $('#notesVersion').textContent = S.update.version;
+  $('#notesBody').innerHTML = mdToHtml(S.update.notes);
+  $('#notesModal').hidden = false;
 }
 
 function cmpZoom(mode) {

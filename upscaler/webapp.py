@@ -10,9 +10,11 @@ import threading
 import time
 import traceback
 
-from . import __version__, engine, tools
+from concurrent.futures import ThreadPoolExecutor
+
+from . import __version__, engine, tools, updater
 from .engine import (ENCODERS, MODELS, OUTPUT_SIZES, SPEEDS, Cancelled, Settings, Upscaler,
-                     UpscaleError, fmt_time)
+                     UpscaleError, fmt_time, fmt_time_ms)
 
 VIDEO_EXT = (".mp4", ".mkv", ".mov", ".avi", ".wmv", ".flv", ".webm", ".m4v", ".mpg",
              ".mpeg", ".ts", ".m2ts", ".mts", ".vob", ".3gp", ".ogv", ".divx", ".asf")
@@ -110,6 +112,9 @@ class Api:
         self._gpu_error = ""
         self._last_output_dir = ""
         self._settings = self._load_settings()
+        self._update: dict | None = None
+        self._updating = False
+        self._frame_pool = ThreadPoolExecutor(max_workers=4)
         threading.Thread(target=self._detect_gpus, daemon=True).start()
 
     # ------------------------------------------------------------------ interne
@@ -253,6 +258,7 @@ class Api:
             "gpus": self._gpus,
             "files": files,
             "running": self._running,
+            "install_mode": updater.install_mode(),
         }
 
     def poll(self) -> dict:
@@ -346,7 +352,7 @@ class Api:
             return True
         return False
 
-    def preview(self, fid=None) -> bool:
+    def preview(self, fid=None, index=None) -> bool:
         with self._lock:
             if self._running:
                 return False
@@ -362,7 +368,8 @@ class Api:
             self._task = "preview"
             self._progress = None
             settings = Settings.from_dict(self._settings.to_dict())
-        threading.Thread(target=self._run_preview, args=(target, settings), daemon=True).start()
+        threading.Thread(target=self._run_preview, args=(target, settings, index),
+                         daemon=True).start()
         return True
 
     def open_output(self, fid=None) -> bool:
@@ -391,8 +398,119 @@ class Api:
 
     def open_url(self, url: str) -> None:
         import webbrowser
-        if str(url).startswith("https://"):
+        if str(url).startswith("https://github.com/") or str(url).startswith("https://developer.microsoft.com/"):
             webbrowser.open(url)
+
+    # ---- choix de l'image d'aperçu --------------------------------------------
+    @staticmethod
+    def _frame_time(info, index: int) -> float:
+        """Temps de recherche qui tombe exactement sur l'image n° index."""
+        return max(0.0, (index - 0.5) / info.fps_float) if index > 0 else 0.0
+
+    def frame_info(self, fid) -> dict:
+        f = self._files.get(int(fid))
+        if not f or not f.get("info"):
+            return {}
+        info = f["info"]
+        return {"id": f["id"], "name": f["name"], "fps": info.fps_float, "frames": max(1, info.frames),
+                "duration": info.duration, "width": info.width, "height": info.height,
+                "res": f["res"], "out": f["out"]}
+
+    def get_frame(self, fid, index, width=1280) -> dict:
+        f = self._files.get(int(fid))
+        if not f or not f.get("info"):
+            return {}
+        info = f["info"]
+        index = max(0, min(int(index), max(0, info.frames - 1)))
+        t = self._frame_time(info, index)
+        try:
+            data = engine.grab_frame_jpeg(f["path"], t, int(width))
+        except Exception as e:  # noqa: BLE001
+            return {"error": str(e), "index": index}
+        return {"index": index, "time": fmt_time_ms(index / info.fps_float),
+                "data": "data:image/jpeg;base64," + base64.b64encode(data).decode("ascii")}
+
+    def get_filmstrip(self, fid, count=12) -> list:
+        f = self._files.get(int(fid))
+        if not f or not f.get("info"):
+            return []
+        info = f["info"]
+        count = max(2, min(int(count), 24))
+        frames = max(1, info.frames)
+        indexes = [int((i + 0.5) * frames / count) for i in range(count)]
+
+        def grab(idx):
+            try:
+                data = engine.grab_frame_jpeg(f["path"], self._frame_time(info, idx), 200, 6)
+                return {"index": idx, "data": "data:image/jpeg;base64,"
+                        + base64.b64encode(data).decode("ascii")}
+            except Exception:  # noqa: BLE001
+                return {"index": idx, "data": ""}
+
+        return list(self._frame_pool.map(grab, indexes))
+
+    # ---- mises à jour ----------------------------------------------------------
+    def check_update(self, manual=False) -> dict:
+        try:
+            info = updater.check()
+        except Exception as e:  # noqa: BLE001
+            self._log(f"Vérification des mises à jour impossible : {e}")
+            if manual:
+                self._toast("warn", "Vérification impossible",
+                            "Pas de connexion à GitHub. Réessayez plus tard.")
+            return {"status": "error", "error": str(e)}
+        if info is None:
+            if manual:
+                self._toast("success", "Vous avez la dernière version",
+                            f"Upscale Video AI {__version__} est à jour.")
+            return {"status": "uptodate", "current": __version__}
+        self._update = info
+        self._log(f"Nouvelle version disponible : {info['version']} (actuelle : {__version__})")
+        self._emit(type="update", **info)
+        return {"status": "available", **info}
+
+    def install_update(self) -> bool:
+        info = self._update
+        if not info or self._updating:
+            return False
+        if self._running:
+            self._toast("info", "Traitement en cours",
+                        "La mise à jour pourra être installée à la fin du traitement.")
+            return False
+        if not info.get("can_install"):
+            self.open_url(info.get("page", ""))
+            return False
+        self._updating = True
+        threading.Thread(target=self._do_update, args=(info,), daemon=True).start()
+        return True
+
+    def _do_update(self, info: dict) -> None:
+        def progress(done, total):
+            self._emit(type="update_progress", done=done, total=total,
+                       fraction=(done / total) if total else 0)
+        try:
+            self._log(f"Téléchargement de la version {info['version']}…")
+            plan = updater.prepare(info, progress)
+            self._emit(type="update_ready", version=info["version"])
+            self._log("Installation de la mise à jour et redémarrage…")
+            self._save_settings()
+            time.sleep(1.2)
+            updater.apply_and_restart(plan)
+            time.sleep(0.3)
+            os._exit(0)
+        except Exception as e:  # noqa: BLE001
+            self._updating = False
+            self._log(f"✖ Mise à jour : {e}")
+            self._emit(type="update_failed", error=str(e), page=info.get("page", ""))
+
+    def _startup_tasks(self) -> None:
+        try:
+            updater.cleanup_old_versions()
+        except Exception:
+            pass
+        if self._settings.auto_update:
+            time.sleep(4)
+            self.check_update(manual=False)
 
     # ------------------------------------------------------------------ travail
     def _on_progress(self, fid: int, index: int, count: int):
@@ -459,13 +577,18 @@ class Api:
                 self._toast("success", f"{ok} vidéo(s) terminée(s) en {elapsed}",
                             "Vos vidéos en haute résolution sont prêtes.")
 
-    def _run_preview(self, fid: int, settings: Settings) -> None:
+    def _run_preview(self, fid: int, settings: Settings, index=None) -> None:
         f = self._files.get(fid)
         try:
             self._upscaler = Upscaler(on_log=self._log)
-            self._emit(type="preview_started", id=fid, name=f["name"])
-            cmp_, ai = self._upscaler.preview(f["path"], settings)
             info = f["info"]
+            if index is None:
+                index = int(info.frames * 0.5)
+            index = max(0, min(int(index), max(0, info.frames - 1)))
+            t = self._frame_time(info, index)
+            label = fmt_time_ms(index / info.fps_float)
+            self._emit(type="preview_started", id=fid, name=f["name"], index=index, time=label)
+            cmp_, ai = self._upscaler.preview(f["path"], settings, time_s=t)
             plan = engine.make_plan(info, settings)
             w, h = plan.out_w, plan.out_h
             if w > 3840:  # limite d'affichage
@@ -476,7 +599,7 @@ class Api:
             after = _jpeg_data_uri(ai, w, h, "lanczos")
             self._emit(type="preview_done", id=fid, before=before, after=after, width=w,
                        height=h, name=f["name"], source=f["res"], output=f"{plan.out_w}×{plan.out_h}",
-                       model=settings.model)
+                       model=settings.model, index=index, time=label)
         except Cancelled:
             self._emit(type="preview_failed", error="Aperçu annulé.")
         except Exception as e:  # noqa: BLE001
@@ -535,6 +658,8 @@ def run(selftest_report: str | None = None) -> int:
 
     def on_start():
         _force_dark_titlebar(window)
+        if not selftest_report:
+            threading.Thread(target=api._startup_tasks, daemon=True).start()
         try:
             noop = lambda e: None  # noqa: E731
             doc = window.dom.document

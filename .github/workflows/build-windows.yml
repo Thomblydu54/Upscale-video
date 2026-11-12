@@ -69,11 +69,18 @@ jobs:
         timeout-minutes: 8
         shell: pwsh
         run: |
+          $env:UPV_CHILD_MARKER = "$PWD\child.txt"
           $p = Start-Process -FilePath "dist/onefile/UpscaleVideoAI.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
+          if (Select-String -Path selftest.txt -Pattern "update-child: lancé" -Quiet) {
+            Start-Sleep -Seconds 20
+            if (Test-Path child.txt) { $c = Get-Content child.txt } else { $c = "CHILD FAIL (aucun résultat)" }
+            Add-Content selftest.txt "INFO relance après mise à jour : $c"
+            if ($c -notmatch "CHILD OK") { Add-Content selftest.txt "FAIL relance après mise à jour"; Add-Content selftest.txt "SELFTEST FAILED" }
+          }
           Get-Content selftest.txt
           $summary = (Get-Content selftest.txt | Where-Object { $_ -match "^(OK|INFO|FAIL|SELFTEST)" }) -join " | "
           Write-Output "::notice title=selftest::$summary"
-          if ($p.ExitCode -ne 0) {
+          if ($p.ExitCode -ne 0 -or (Select-String -Path selftest.txt -Pattern "SELFTEST FAILED" -Quiet)) {
             $fails = (Get-Content selftest.txt | Where-Object { $_ -like "FAIL*" }) -join " | "
             Write-Output "::error title=selftest::$fails"
             throw "Auto-test échoué (code $($p.ExitCode))"
@@ -101,7 +108,11 @@ jobs:
         run: |
           TAG="v${{ steps.ver.outputs.version }}"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then TAG="${GITHUB_REF#refs/tags/}"; fi
-          NOTES="Téléchargez **UpscaleVideoAI.exe** et double-cliquez dessus : c'est tout.
+          CHANGES=$(python -c "import re,sys; t=open('CHANGELOG.md',encoding='utf-8').read(); m=re.search(r'^## v?'+re.escape(sys.argv[1])+r'\b.*?\n(.*?)(?=^## |\Z)', t, re.S|re.M); print(m.group(1).strip() if m else '')" "${TAG#v}")
+          NOTES="${CHANGES}
+          
+          ---
+          Téléchargez **UpscaleVideoAI.exe** et double-cliquez dessus : c'est tout. Si vous avez déjà l'application, elle se met à jour toute seule.
           
           - \`UpscaleVideoAI.exe\` : un seul fichier, rien à installer.
           - \`UpscaleVideoAI-portable.zip\` : même application en dossier (démarrage plus rapide).

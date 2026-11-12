@@ -75,6 +75,58 @@ def selftest(report_path: str) -> int:
 
     check("probe", probe_clip)
 
+    def frame_grab():
+        tmp = tempfile.mkdtemp(prefix="upv_selftest_")
+        clip = os.path.join(tmp, "clip.mp4")
+        tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                   "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=25", "-t", "2",
+                   "-pix_fmt", "yuv420p", clip], check=True,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        data = engine.grab_frame_jpeg(clip, 1.0, 640)
+        if not data.startswith(b"\xff\xd8"):
+            raise RuntimeError("JPEG invalide")
+        return f"{len(data)} octets"
+
+    check("extraction d'image (aperçu)", frame_grab)
+
+    # --- mises à jour : téléchargement + vérification + échange d'un exe en cours d'exécution
+    from upscaler import updater
+    try:
+        info = updater.check(current="0.0.0")
+    except Exception as e:  # noqa: BLE001  (limite de l'API GitHub, réseau…)
+        info = None
+        lines.append(f"INFO mise à jour : API GitHub injoignable ({e})")
+    if info:
+        def update_download():
+            tmp = tempfile.mkdtemp(prefix="upv_upd_")
+            t0 = time.time()
+            updater.download(info["url"], os.path.join(tmp, "dl.bin"), info["size"], info["sha256"])
+            return (f"v{info['version']} ({info['size'] / 1e6:.0f} Mo) téléchargée en "
+                    f"{time.time() - t0:.0f} s, SHA-256 {'vérifié' if info['sha256'] else 'non fourni'}")
+
+        check("téléchargement de mise à jour", update_download)
+
+        if updater.install_mode() == "onefile":
+            def update_swap():
+                import shutil
+                tmp = tempfile.mkdtemp(prefix="upv_swap_")
+                app = os.path.join(tmp, "App.exe")
+                shutil.copy2(sys.executable, app)
+                proc = subprocess.Popen([app, "--idle", "60"], env=updater._clean_env())
+                time.sleep(5)
+                if proc.poll() is not None:
+                    raise RuntimeError("la copie de test ne tourne pas")
+                shutil.copy2(sys.executable, app + ".new")
+                old = updater.swap_executable(app + ".new", app)
+                proc.kill()
+                marker = os.environ.get("UPV_CHILD_MARKER")
+                if marker:
+                    updater._spawn_detached([app, "--update-child-test", marker], cwd=tmp)
+                    lines.append("INFO update-child: lancé")
+                return f"exe en cours d'exécution remplacé (ancien : {os.path.basename(old)})"
+
+            check("installation de mise à jour", update_swap)
+
     try:  # non bloquant : pas de GPU sur les machines de CI
         gpus, raw = tools.detect_gpus()
         lines.append(f"INFO gpu: {gpus or 'aucun GPU Vulkan'}")
@@ -160,6 +212,26 @@ def run_modern() -> bool:
 
 def main():
     args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == "--idle":  # utilisé par l'auto-test des mises à jour
+        close_splash()
+        time.sleep(float(args[1]))
+        return
+    if len(args) >= 2 and args[0] == "--update-child-test":
+        # vérifie qu'une instance relancée après une mise à jour démarre correctement,
+        # même après la fermeture de l'instance qui l'a lancée
+        close_splash()
+        time.sleep(10)
+        try:
+            from upscaler import tools, webapp
+            meipass = getattr(sys, "_MEIPASS", "")
+            ok = (os.path.isdir(meipass) and os.path.isfile(tools.find_tool("ffmpeg"))
+                  and os.path.isfile(webapp.ui_index()))
+            msg = f"{'CHILD OK' if ok else 'CHILD FAIL'} {meipass}"
+        except Exception as e:  # noqa: BLE001
+            msg = f"CHILD FAIL {e}"
+        with open(args[1], "w", encoding="utf-8") as f:
+            f.write(msg + "\n")
+        return
     if len(args) >= 2 and args[0] == "--selftest":
         close_splash()
         sys.exit(selftest(args[1]))

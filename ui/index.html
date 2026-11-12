@@ -13,6 +13,19 @@
   </div>
   <div class="grid-bg" aria-hidden="true"></div>
 
+  <!-- Bannière de mise à jour -->
+  <div class="update-banner" id="updateBanner" hidden>
+    <div class="ub-ic"><svg viewBox="0 0 24 24"><path d="M12 3v12M7 10l5 5 5-5M5 21h14"/></svg></div>
+    <div class="ub-text">
+      <b id="ubTitle">Nouvelle version disponible</b>
+      <span id="ubSub"></span>
+      <div class="ub-bar" id="ubBar" hidden><div id="ubFill"></div></div>
+    </div>
+    <button class="btn ghost sm" id="ubNotes">Nouveautés</button>
+    <button class="btn primary sm" id="ubInstall">Mettre à jour</button>
+    <button class="icon-btn" id="ubClose" title="Plus tard">×</button>
+  </div>
+
   <div class="app">
     <!-- ================= Barre du haut ================= -->
     <header class="topbar">
@@ -34,7 +47,7 @@
           <h1>Upscale <span class="grad-text">Video AI</span></h1>
           <p>Agrandissement vidéo par intelligence artificielle</p>
         </div>
-        <span class="version" id="version">v1.0</span>
+        <button class="version" id="version" title="Rechercher des mises à jour">v1.0</button>
       </div>
       <div class="top-right">
         <div class="chip" id="gpuChip" title="Carte graphique utilisée par l'IA">
@@ -184,6 +197,14 @@
                 <input type="checkbox" id="tta"><span class="switch"></span>
               </label>
 
+              <label class="switch-row">
+                <span>
+                  <b>Mises à jour automatiques</b>
+                  <small>Vérifie au démarrage si une nouvelle version existe</small>
+                </span>
+                <input type="checkbox" id="autoUpdate"><span class="switch"></span>
+              </label>
+
               <label class="field-label">Dossier temporaire</label>
               <div class="path-field" id="tmpdirField">
                 <svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2z"/></svg>
@@ -243,40 +264,102 @@
     <pre id="log"></pre>
   </div>
 
-  <!-- ================= Aperçu avant / après ================= -->
+  <!-- ================= Aperçu : choix de l'image + avant / après ================= -->
   <div class="modal" id="previewModal" hidden>
-    <div class="modal-card">
+    <div class="modal-card mode-pick" id="pvCard">
       <div class="modal-head">
         <div>
-          <div class="modal-title">Aperçu IA <span class="muted" id="pvName"></span></div>
+          <div class="modal-title"><span id="pvTitle">Choisir l'image à prévisualiser</span> <span class="muted" id="pvName"></span></div>
           <div class="modal-chips" id="pvChips"></div>
         </div>
         <div class="modal-tools">
-          <div class="seg small" id="pvZoom">
+          <div class="seg small only-compare" id="pvZoom">
             <button data-z="fit" class="on">Ajuster</button><button data-z="1">100 %</button><button data-z="2">200 %</button>
           </div>
           <button class="icon-btn" id="pvClose">×</button>
         </div>
       </div>
-      <div class="compare" id="compare">
-        <div class="layer after"><img id="pvAfter" alt=""></div>
-        <div class="layer before" id="pvBeforeLayer"><img id="pvBefore" alt=""></div>
-        <div class="handle" id="pvHandle"><span class="knob">
-          <svg viewBox="0 0 24 24"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span></div>
-        <span class="tag-l">Original</span><span class="tag-r">IA <b id="pvModel"></b></span>
-        <div class="pv-loading" id="pvLoading">
-          <div class="spinner"></div>
-          <b>L'IA travaille…</b>
-          <span class="muted">Agrandissement d'une image de la vidéo</span>
+
+      <div class="stage">
+        <!-- Sélecteur d'image -->
+        <div class="picker only-pick" id="picker">
+          <img id="pkImg" alt="">
+          <div class="pk-badge"><span class="rec"></span><b id="pkFrameBig">Image 1</b><span id="pkClockBig">00:00:00.00</span></div>
+          <div class="pk-loading" id="pkLoading"><div class="spinner small"></div></div>
+        </div>
+        <!-- Comparateur -->
+        <div class="compare only-compare" id="compare">
+          <div class="layer after"><img id="pvAfter" alt=""></div>
+          <div class="layer before" id="pvBeforeLayer"><img id="pvBefore" alt=""></div>
+          <div class="handle" id="pvHandle"><span class="knob">
+            <svg viewBox="0 0 24 24"><path d="M9 6l-6 6 6 6M15 6l6 6-6 6"/></svg></span></div>
+          <span class="tag-l">Original</span><span class="tag-r">IA <b id="pvModel"></b></span>
+          <div class="pv-loading" id="pvLoading">
+            <div class="spinner"></div>
+            <b>L'IA travaille…</b>
+            <span class="muted" id="pvLoadingSub">Agrandissement de l'image choisie</span>
+          </div>
         </div>
       </div>
+
+      <!-- Ligne de temps -->
+      <div class="timeline only-pick">
+        <div class="filmstrip-wrap">
+          <div class="filmstrip" id="filmstrip"></div>
+          <input type="range" id="pkRange" min="0" max="100" value="50" step="1">
+        </div>
+        <div class="tl-row">
+          <div class="tl-buttons">
+            <button class="tl-btn" data-step="-10s" title="Reculer de 10 secondes (Maj + Pg Préc)">
+              <svg viewBox="0 0 24 24"><path d="M11 17l-5-5 5-5M18 17l-5-5 5-5"/></svg><small>10 s</small></button>
+            <button class="tl-btn" data-step="-1s" title="Reculer d'une seconde (Maj + ←)">
+              <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg><small>1 s</small></button>
+            <button class="tl-btn" data-step="-1" title="Image précédente (←)">
+              <svg viewBox="0 0 24 24"><path d="M19 20L9 12l10-8zM5 19V5"/></svg></button>
+            <button class="tl-btn" data-step="+1" title="Image suivante (→)">
+              <svg viewBox="0 0 24 24"><path d="M5 4l10 8-10 8zM19 5v14"/></svg></button>
+            <button class="tl-btn" data-step="+1s" title="Avancer d'une seconde (Maj + →)">
+              <small>1 s</small><svg viewBox="0 0 24 24"><path d="M9 18l6-6-6-6"/></svg></button>
+            <button class="tl-btn" data-step="+10s" title="Avancer de 10 secondes">
+              <small>10 s</small><svg viewBox="0 0 24 24"><path d="M13 17l5-5-5-5M6 17l5-5-5-5"/></svg></button>
+            <button class="tl-btn" data-step="random" title="Image au hasard">
+              <svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="4"/><circle cx="8.5" cy="8.5" r="1.3"/><circle cx="15.5" cy="15.5" r="1.3"/><circle cx="15.5" cy="8.5" r="1.3"/><circle cx="8.5" cy="15.5" r="1.3"/></svg></button>
+          </div>
+          <div class="tl-goto">
+            <span class="muted">Aller à</span>
+            <input type="text" id="pkGoto" placeholder="00:01:23" spellcheck="false">
+          </div>
+          <div class="tl-info"><b id="pkFrame">Image 1 / 1</b><span id="pkClock">00:00:00.00</span></div>
+        </div>
+      </div>
+
       <div class="modal-foot">
-        <span class="muted">Glissez le curseur pour comparer · molette pour zoomer · glisser pour se déplacer</span>
-        <button class="btn primary sm" id="pvStart">
+        <span class="muted only-pick">← → image par image · Maj + ← → ±1 seconde · cliquez sur la pellicule pour sauter</span>
+        <button class="btn soft sm only-compare" id="pvBack">
+          <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 9h18M8 5v4M16 5v4"/></svg>
+          Changer d'image
+        </button>
+        <span class="muted only-compare">Glissez le curseur · molette pour zoomer · glisser pour se déplacer</span>
+        <button class="btn primary only-pick" id="pkGo">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>
+          Améliorer cette image avec l'IA
+        </button>
+        <button class="btn primary sm only-compare" id="pvStart">
           <svg class="ic" viewBox="0 0 24 24"><path d="M12 2l2.4 6.6L21 11l-6.6 2.4L12 20l-2.4-6.6L3 11l6.6-2.4z"/></svg>
           Lancer avec ces réglages
         </button>
       </div>
+    </div>
+  </div>
+
+  <!-- Nouveautés d'une mise à jour -->
+  <div class="modal" id="notesModal" hidden>
+    <div class="modal-card small">
+      <div class="modal-head">
+        <div class="modal-title"><span class="new-ic">★</span> Nouveautés de la version <span id="notesVersion"></span></div>
+        <button class="icon-btn" id="notesClose">×</button>
+      </div>
+      <div class="notes" id="notesBody"></div>
     </div>
   </div>
 

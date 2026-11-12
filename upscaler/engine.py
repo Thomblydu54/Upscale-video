@@ -107,6 +107,7 @@ class Settings:
     container: str = "mp4"      # mp4 | mkv
     output_dir: str = ""        # vide = même dossier que la source
     temp_dir: str = ""          # vide = dossier temporaire système
+    auto_update: bool = True    # recherche de mises à jour au démarrage
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -458,6 +459,29 @@ def fmt_time(seconds: float) -> str:
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
+def fmt_time_ms(seconds: float) -> str:
+    """hh:mm:ss.cc"""
+    seconds = max(0.0, float(seconds or 0))
+    whole = int(seconds)
+    cs = int(round((seconds - whole) * 100))
+    if cs == 100:
+        whole, cs = whole + 1, 0
+    return f"{fmt_time(whole)}.{cs:02d}"
+
+
+def grab_frame_jpeg(path: str, t: float, width: int = 1280, quality: int = 3) -> bytes:
+    """Extrait l'image affichée au temps `t` (recherche précise) en JPEG."""
+    proc = tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
+                      "-ss", f"{max(0.0, t):.4f}", "-i", path, "-frames:v", "1", "-an", "-sn",
+                      "-vf", f"scale='min({width},iw)':-2:flags=bicubic", "-q:v", str(quality),
+                      "-f", "image2pipe", "-c:v", "mjpeg", "-"],
+                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
+    if proc.returncode != 0 or not proc.stdout:
+        raise UpscaleError("Impossible d'extraire l'image :\n"
+                           + proc.stderr.decode("utf-8", "replace")[-400:])
+    return proc.stdout
+
+
 def _tail(path: str, n: int = 1500) -> str:
     try:
         with open(path, "rb") as f:
@@ -572,8 +596,11 @@ class Upscaler:
         self.on_progress(Progress(done, total, speed, eta, now - self._t_start, stage))
 
     # ---- aperçu -----------------------------------------------------------------
-    def preview(self, path: str, settings: Settings, position: float = 0.5) -> tuple[str, str]:
-        """Agrandit une seule image de la vidéo. Retourne (comparaison.png, image_ia.png)."""
+    def preview(self, path: str, settings: Settings, position: float = 0.5,
+                time_s: Optional[float] = None) -> tuple[str, str]:
+        """Agrandit une seule image de la vidéo. Retourne (comparaison.png, image_ia.png).
+
+        `time_s` (secondes) choisit précisément l'image ; sinon `position` (0..1 de la durée)."""
         self._reset()
         info = probe(path)
         plan = make_plan(info, settings)
@@ -583,10 +610,13 @@ class Upscaler:
         src = os.path.join(folder, f"{stem}_source.png")
         ai = os.path.join(folder, f"{stem}_ia_x{plan.ai_scale}.png")
         cmp_ = os.path.join(folder, f"{stem}_comparaison.png")
-        t = max(0.0, info.duration * position) if info.duration else 0.0
+        if time_s is not None:
+            t = max(0.0, float(time_s))
+        else:
+            t = max(0.0, info.duration * position) if info.duration else 0.0
         ffmpeg = tools.find_tool("ffmpeg")
 
-        self.on_log(f"Aperçu : extraction de l'image à {fmt_time(t)}…")
+        self.on_log(f"Aperçu : extraction de l'image à {fmt_time_ms(t)}…")
         proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                           "-ss", f"{t:.3f}", "-i", path, "-frames:v", "1",
                           "-vf", plan.decode_filter, src],
