@@ -44,6 +44,7 @@ jobs:
           --splash assets/splash.png
           --add-data "bin;bin"
           --add-data "assets;assets"
+          --add-data "ui;ui"
           --collect-data sv_ttk
           --collect-all tkinterdnd2
           --distpath dist/onefile
@@ -57,6 +58,7 @@ jobs:
           --icon assets/icon.ico
           --add-data "bin;bin"
           --add-data "assets;assets"
+          --add-data "ui;ui"
           --collect-data sv_ttk
           --collect-all tkinterdnd2
           --distpath dist/onedir
@@ -64,6 +66,7 @@ jobs:
           main.py
 
       - name: Auto-test de l'exe
+        timeout-minutes: 8
         shell: pwsh
         run: |
           $p = Start-Process -FilePath "dist/onefile/UpscaleVideoAI.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
@@ -74,6 +77,35 @@ jobs:
             $fails = (Get-Content selftest.txt | Where-Object { $_ -like "FAIL*" }) -join " | "
             Write-Output "::error title=selftest::$fails"
             throw "Auto-test échoué (code $($p.ExitCode))"
+          }
+
+      - name: Capture d'écran de l'interface
+        timeout-minutes: 5
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+          $p = Start-Process -FilePath "dist/onedir/UpscaleVideoAI/UpscaleVideoAI.exe" -PassThru
+          Start-Sleep -Seconds 25
+          $b = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+          $bmp = New-Object System.Drawing.Bitmap $b.Width, $b.Height
+          $g = [System.Drawing.Graphics]::FromImage($bmp)
+          $g.CopyFromScreen($b.Location, [System.Drawing.Point]::Empty, $b.Size)
+          $bmp.Save("$PWD\screenshot.png", [System.Drawing.Imaging.ImageFormat]::Png)
+          $w = [Math]::Min(1100, $b.Width); $h = [int]($b.Height * $w / $b.Width)
+          $small = New-Object System.Drawing.Bitmap $bmp, $w, $h
+          $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq "image/jpeg" }
+          $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
+          $ep.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), 55L
+          $small.Save("$PWD\screenshot.jpg", $codec, $ep)
+          Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+          Get-Process UpscaleVideoAI -ErrorAction SilentlyContinue | Stop-Process -Force
+          $b64 = [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\screenshot.jpg"))
+          Write-Output "Taille base64 : $($b64.Length) ($($b.Width)x$($b.Height))"
+          $n = [Math]::Ceiling($b64.Length / 30000)
+          for ($i = 0; $i -lt [Math]::Min($n, 10); $i++) {
+            $chunk = $b64.Substring($i * 30000, [Math]::Min(30000, $b64.Length - $i * 30000))
+            Write-Output "::notice title=shot-$i-of-$n::$chunk"
           }
 
       - name: Préparer les fichiers à publier
