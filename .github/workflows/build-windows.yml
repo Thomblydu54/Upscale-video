@@ -13,6 +13,9 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: "utf-8"
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +68,11 @@ jobs:
         run: |
           $p = Start-Process -FilePath "dist/onefile/UpscaleVideoAI.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
           Get-Content selftest.txt
-          if ($p.ExitCode -ne 0) { throw "Auto-test échoué (code $($p.ExitCode))" }
+          if ($p.ExitCode -ne 0) {
+            $fails = (Get-Content selftest.txt | Where-Object { $_ -like "FAIL*" }) -join " | "
+            Write-Output "::error title=selftest::$fails"
+            throw "Auto-test échoué (code $($p.ExitCode))"
+          }
 
       - name: Préparer les fichiers à publier
         shell: pwsh

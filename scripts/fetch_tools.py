@@ -40,7 +40,7 @@ UPSCAYL_URL = ("https://raw.githubusercontent.com/upscayl/upscayl/"
 
 
 def download(url: str) -> bytes:
-    print(f"  ↓ {url}", flush=True)
+    print(f"  -> {url}", flush=True)
     req = urllib.request.Request(url, headers={"User-Agent": "UpscaleVideoAI-build"})
     for attempt in range(4):
         try:
@@ -119,4 +119,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    try:
+        main()
+    except Exception as exc:  # annotation visible dans l'interface GitHub Actions
+        import traceback
+        traceback.print_exc()
+        print(f"::error title=fetch_tools::{type(exc).__name__}: {exc}".replace("\n", " "))
+        sys.exit(1)
