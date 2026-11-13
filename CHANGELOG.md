@@ -1,7 +1,10 @@
 # Journal des modifications
 
+## v1.7.1
+- **Fluidité personnalisée : nombres entiers uniquement** (ex. 60, 120, 144). Le champ n'accepte que des chiffres : la virgule, le point et les lettres sont ignorés pendant la frappe. Une ancienne valeur décimale est arrondie.
+
 ## v1.7.0
-- **Fluidité personnalisée** : un nouveau bouton « Perso » dans la section Fluidité. Tapez la fréquence voulue (de 1 à 240 i/s, virgule acceptée, ex. 50, 60, 59,94 ou 144) ou choisissez un raccourci (50 · 60 · 90 · 120 · 144 · 240).
+- **Fluidité personnalisée** : un nouveau bouton « Perso » dans la section Fluidité. Tapez la fréquence voulue (de 1 à 240 i/s, ex. 50, 60 ou 144) ou choisissez un raccourci (50 · 60 · 90 · 120 · 144 · 240).
   - Chaque vidéo sort **exactement** à cette fréquence, avec la même durée et le son synchronisé. Ça marche même quand la fréquence voulue n'est pas un multiple de celle de la vidéo (ex. 24 → 60, 25 → 60, 30 → 50, 29,97 → 60).
   - RIFE crée les images aux bons instants. Il n'y a ni image dupliquée ni image sautée au milieu de la vidéo, donc pas de saccade.
   - Une vidéo déjà aussi fluide (ou plus) que la valeur demandée garde sa fréquence d'origine. Un message l'indique sous le champ.

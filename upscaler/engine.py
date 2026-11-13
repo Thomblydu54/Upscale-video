@@ -170,7 +170,7 @@ class Settings:
     # nettoyage des défauts de compression avant l'IA (détection automatique par fichier)
     clean: str = "auto"         # auto | off
     # fluidité personnalisée : fréquence de sortie voulue (utilisée si interpolation == "custom")
-    interp_fps: float = 60.0
+    interp_fps: int = 60        # nombre entier uniquement (60, 120…)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -192,9 +192,14 @@ class Settings:
             s.output_size = cls.output_size
         if s.interpolation not in dict(INTERPOLATIONS) and s.interpolation != INTERP_CUSTOM:
             s.interpolation = cls.interpolation
-        if not math.isfinite(s.interp_fps):
-            s.interp_fps = cls.interp_fps
-        s.interp_fps = round(max(INTERP_FPS_MIN, min(INTERP_FPS_MAX, s.interp_fps)), 3)
+        # fréquence personnalisée : nombre entier (une ancienne valeur décimale est arrondie)
+        try:
+            fps = float(str((data or {}).get("interp_fps", s.interp_fps)).replace(",", "."))
+        except ValueError:
+            fps = float("nan")
+        if not math.isfinite(fps):
+            fps = cls.interp_fps
+        s.interp_fps = int(round(max(INTERP_FPS_MIN, min(INTERP_FPS_MAX, fps))))
         if s.image_format not in dict(IMAGE_FORMATS):
             s.image_format = cls.image_format
         if s.clean not in ("auto", "off"):

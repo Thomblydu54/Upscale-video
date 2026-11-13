@@ -267,17 +267,18 @@ function updateSizeHint() {
 }
 const fmtFps = (x) => String(Math.round(x * 100) / 100).replace('.', ',');
 
-/* fréquence personnalisée saisie (virgule ou point acceptés) */
+/* fréquence personnalisée saisie : nombre entier uniquement (60, 120…) */
 function commitCustomFps() {
   const inp = $('#interpFps');
-  const v = Number(String(inp.value).trim().replace(',', '.').replace(/\s*(i\/s|fps|ips)$/i, ''));
-  if (!Number.isFinite(v) || v < 1 || v > 240) {
+  const txt = String(inp.value).trim();
+  const v = Number(txt);
+  if (!/^\d+$/.test(txt) || v < 1 || v > 240) {
     inp.classList.add('bad');
-    toast('info', 'Fréquence invalide', 'Entrez un nombre d\'images par seconde entre 1 et 240 (ex. 60 ou 59,94).');
+    toast('info', 'Fréquence invalide', 'Entrez un nombre entier d\'images par seconde entre 1 et 240 (ex. 60 ou 120).');
     return;
   }
   inp.classList.remove('bad');
-  setSetting('interp_fps', Math.round(v * 1000) / 1000);
+  setSetting('interp_fps', v);
 }
 
 /* ------------------------------------------------------------------ interactions */
@@ -315,7 +316,12 @@ function bindUi() {
     if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
     else if (e.key === 'Escape') { e.target.value = fmtFps(Number(S.settings.interp_fps) || 60); e.target.blur(); }
   });
-  $('#interpFps').addEventListener('input', (e) => e.target.classList.remove('bad'));
+  $('#interpFps').addEventListener('input', (e) => {
+    // chiffres uniquement : virgule, point et lettres sont ignorés à la frappe
+    const clean = e.target.value.replace(/\D/g, '').slice(0, 3);
+    if (clean !== e.target.value) e.target.value = clean;
+    e.target.classList.remove('bad');
+  });
   $$('#fpsChips button').forEach((b) => b.addEventListener('click', () => setSetting('interp_fps', Number(b.dataset.f))));
   $('#outdirField').addEventListener('click', async (e) => {
     if (e.target.closest('.mini-x')) return;

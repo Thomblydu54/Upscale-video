@@ -174,7 +174,7 @@ def selftest(report_path: str) -> int:
 
         engine.make_plan = small_batches
         try:
-            st = engine.Settings(output_size="x1", interpolation="custom", interp_fps=25.0, gpu="-1")
+            st = engine.Settings(output_size="x1", interpolation="custom", interp_fps=25, gpu="-1")
             out = engine.Upscaler().process(clip, st)
         except engine.UpscaleError as e:
             if "RIFE" in str(e):
