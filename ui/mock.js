@@ -44,8 +44,8 @@
     ['amf_h264', 'H.264 – AMD AMF'], ['amf_hevc', 'H.265 – AMD AMF'], ['qsv_h264', 'H.264 – Intel Quick Sync'], ['qsv_hevc', 'H.265 – Intel Quick Sync'],
   ];
   const SAMPLES = [
-    { name: 'Tokyo_nuit_2009.mp4', w: 640, h: 360, dur: '00:04:12', size: 187e6, img: 'city' },
-    { name: 'Le_voyage_episode01.mkv', w: 854, h: 480, dur: '00:23:40', size: 412e6, img: 'anime' },
+    { name: 'Tokyo_nuit_2009.mp4', w: 640, h: 360, dur: '00:04:12', size: 187e6, img: 'city', fps: 30 },
+    { name: 'Le_voyage_episode01.mkv', w: 854, h: 480, dur: '00:23:40', size: 412e6, img: 'anime', fps: 23.976 },
     { name: 'Vacances_plage_camescope.avi', w: 720, h: 576, dur: '00:12:05', size: 890e6, img: 'family', clean: 'moyen' },
     { name: 'Photo_mariage_1998.jpg', w: 800, h: 450, dur: 'Image', size: 2.4e6, img: 'family', kind: 'image', clean: 'léger' },
   ];
@@ -66,7 +66,7 @@
     if (fac <= 1 && (isImg || m === 1)) return k === 'x1' ? 'inchangé' : 'déjà ≥';
     if (fac < 1) fac = 1;
     const ev = (x) => Math.max(2, Math.round(x / 2) * 2);
-    return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${f.fps * m} i/s` : '');
+    return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${Math.round(f.fps * m * 100) / 100} i/s` : '');
   }
   function pub(f) {
     const clean = f.cleanLevel && settings.clean !== 'off' ? `Compression détectée · nettoyage ${f.cleanLevel}` : '';
@@ -76,7 +76,7 @@
   function addSample(s) {
     const f = { id: nextId++, name: s.name, path: 'C:\\Users\\Vous\\Vidéos\\' + s.name, status: 'Prêt', state: 'ready', progress: 0,
       res: `${s.w}×${s.h}`, dur: s.dur, out: '', size: s.size, output: '', error: '', w: s.w, h: s.h, img: s.img,
-      kind: s.kind || 'video', fps: s.kind ? 0 : 25, cleanLevel: s.clean || '',
+      kind: s.kind || 'video', fps: s.kind ? 0 : (s.fps || 25), cleanLevel: s.clean || '',
       frames: s.kind ? 1 : s.dur.split(':').reduce((a, n) => a * 60 + Number(n), 0) * 25 };
     files.push(f);
     setTimeout(() => events.push({ type: 'thumb', id: f.id, thumb: `demo/${s.img}_thumb.jpg` }), 300 + Math.random() * 600);
@@ -138,7 +138,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.7.0', tag: 'v1.7.0', current: '1.6.0', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.7.0', tag: 'v1.7.0', current: '1.6.1', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -158,7 +158,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.6.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.6.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],

@@ -232,14 +232,21 @@ async function setSetting(key, value) {
 function updateSizeHint() {
   const f = S.files.find((x) => x.res && x.out);
   $('#sizeHint').textContent = f ? `${f.res} → ${f.out.split(' · ')[0]}` : '';
-  const v = S.files.find((x) => x.kind !== 'image' && x.fps);
+  // fréquences réelles de TOUTES les vidéos de la liste (chacune garde la sienne)
+  const fpsList = [...new Set(S.files.filter((x) => x.kind !== 'image' && x.fps)
+    .map((x) => Math.round(x.fps * 100) / 100))].sort((a, b) => a - b);
+  const lo = fpsList[0], hi = fpsList[fpsList.length - 1];
   const k = { x2: 2, x3: 3, x4: 4 }[S.settings.interpolation] || 1;
-  $('#fpsHint').textContent = v ? (k > 1 ? `${fmtFps(v.fps)} → ${fmtFps(v.fps * k)} i/s` : `${fmtFps(v.fps)} i/s`) : '';
-  // exemples adaptés à la première vidéo
-  const base = v ? v.fps : 30;
+  const span = (m, round) => {
+    const f = (x) => (round ? String(Math.round(x * m)) : fmtFps(x * m));
+    return lo === hi ? f(lo) : `${f(lo)} à ${f(hi)}`;
+  };
+  $('#fpsHint').textContent = !fpsList.length ? ''
+    : (k > 1 ? `${span(1)} → ${span(k)} i/s` : `${span(1)} i/s`) + (lo !== hi ? ' (selon la vidéo)' : '');
+  const words = { x2: 'double', x3: 'triple', x4: 'quadruple' };
   $$('#interpolation button').forEach((b) => {
     const m = { x2: 2, x3: 3, x4: 4 }[b.dataset.v];
-    if (m) $('small', b).textContent = `${fmtFps(base * m)} i/s`;
+    if (m) $('small', b).textContent = !fpsList.length ? words[b.dataset.v] : (lo === hi ? `${fmtFps(lo * m)} i/s` : `${span(m, true)}`);
   });
 }
 const fmtFps = (x) => String(Math.round(x * 100) / 100).replace('.', ',');
@@ -500,7 +507,7 @@ function updateCard(el, f) {
   $('.from', el).textContent = f.res || '…';
   $('.to', el).textContent = f.out || '…';
   const isImg = f.kind === 'image';
-  $('.dur-badge', el).textContent = isImg ? '' : (f.dur || '');
+  $('.dur-badge', el).textContent = isImg ? '' : (f.dur || '') + (f.dur && f.fps ? ` · ${fmtFps(f.fps)} i/s` : '');
   $('.dur-badge', el).hidden = isImg || !f.dur;
   $('.kind-badge.img', el).hidden = !isImg;
   $('.play', el).lastChild.textContent = isImg ? 'Ouvrir' : 'Lire';

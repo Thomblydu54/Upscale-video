@@ -195,7 +195,7 @@ class Api:
             plan = engine.make_plan(info, settings)
             f["out"] = f"{plan.out_w}×{plan.out_h}"
             if plan.interp > 1:
-                f["out"] += f" · {round(float(Fraction(plan.out_fps)), 2):g} i/s"
+                f["out"] += f" · {round(float(Fraction(plan.out_fps)), 2):g} i/s".replace(".", ",")
         except UpscaleError:
             f["out"] = "déjà ≥" if settings.output_size != "x1" else "inchangé"
 

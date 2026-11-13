@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.6.1
+- **Images par seconde plus claires** : chaque carte affiche maintenant la fréquence réelle de sa vidéo (ex. « 00:04:12 · 24 i/s »).
+- Les boutons « Fluidité » et le résumé tenaient compte uniquement de la **première** vidéo de la liste (ou supposaient 30 i/s quand la liste était vide). Ils affichaient donc souvent « 60 i/s » pour toutes les vidéos. Ils montrent maintenant la plage réelle (ex. « 48 à 60 » pour des vidéos à 24 et 30 i/s), ou « double / triple / quadruple » sans vidéo.
+- Le traitement lui-même n'a pas changé : chaque vidéo a toujours été traitée à sa propre fréquence.
+
 ## v1.6.0
 - **Nettoyage automatique des vidéos compressées** (activé par défaut) : chaque fichier est analysé à l'ajout. Si des blocs de compression sont visibles, ils sont adoucis juste avant l'IA, avec une force adaptée (léger, moyen ou fort). Sinon, rien n'est modifié.
   - Ça concerne surtout les vieux formats (DVD / MPEG-2, DivX / Xvid / MPEG-4, caméscopes, vieux téléphones), les photos JPEG compressées et les vidéos H.264 très dégradées.
