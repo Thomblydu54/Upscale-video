@@ -219,9 +219,9 @@ class ServiceLock:
 
     def __enter__(self):
         self.file = open(self.path, "a+b")
-        self.file.seek(0)
-        self.file.write(b"0")
-        self.file.flush()
+        if self.file.seek(0, os.SEEK_END) == 0:
+            self.file.write(b"0")
+            self.file.flush()
         self.file.seek(0)
         try:
             if tools.IS_WIN:

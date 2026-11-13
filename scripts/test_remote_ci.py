@@ -10,7 +10,10 @@ result = subprocess.run([sys.executable, "-m", "unittest", "discover", "-s", "te
                         cwd=root, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                         encoding="utf-8", errors="replace")
 print(result.stdout, flush=True)
-# Échapper les commandes de workflow, pas seulement les retours à la ligne.
-text = result.stdout[-18000:].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
-print(f"::{'error' if result.returncode else 'notice'} title=Tests calcul distant::{text}", flush=True)
+# GitHub tronque les longues annotations. Séparer le diagnostic pour conserver aussi
+# les traces d'échec qui suivent la liste des tests, même sans accès au serveur de logs.
+report = result.stdout[-18000:]
+for i in range(0, len(report), 2800):
+    text = report[i:i + 2800].replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::{'error' if result.returncode else 'notice'} title=Tests calcul distant {i // 2800 + 1}::{text}", flush=True)
 sys.exit(result.returncode)

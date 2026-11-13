@@ -195,7 +195,8 @@ class RemoteTests(unittest.TestCase):
         self.assertEqual(FakeUpscaler.calls[0]["interp_fps"], 60)
         self.assertEqual(FakeUpscaler.calls[0]["finish"], "auto")
         self.assertEqual(FakeUpscaler.calls[0]["gpu"], "auto")
-        self.assertNotIn("C:", FakeUpscaler.calls[0]["temp_dir"])
+        self.assertEqual(FakeUpscaler.calls[0]["temp_dir"], str(spool / "temp"))
+        self.assertNotEqual(FakeUpscaler.calls[0]["temp_dir"], self.settings.temp_dir)
 
     def test_source_and_result_resume_after_restart(self):
         job = self.create()
@@ -258,6 +259,86 @@ class RemoteTests(unittest.TestCase):
         self.hub.control(job["id"], "run", 50)
         self.worker.step()
         self.assertEqual(self.hub.state["jobs"][job["id"]]["status"], "ready")
+
+    def test_error_keeps_checkpoints_until_explicit_resume_or_abandonment(self):
+        allowed = threading.Event()
+
+        class CanFail(FakeUpscaler):
+            def process(self, source, settings, output, job_dir=None, state=None, on_state=None):
+                if not allowed.is_set():
+                    Path(job_dir).mkdir(parents=True, exist_ok=True)
+                    on_state({"fake_done": 3})
+                    raise engine.UpscaleError("GPU temporairement indisponible")
+                return super().process(source, settings, output, job_dir, state, on_state)
+
+        self.worker.factory = CanFail
+        stop = threading.Event()
+        errors = []
+
+        def work():
+            try:
+                while not stop.wait(0.02):
+                    self.worker.step()
+            except Exception as e:
+                errors.append(e)
+
+        thread = threading.Thread(target=work, daemon=True)
+        thread.start()
+        state = {}
+        target = self.target()
+        output = self.folder / "retry.mp4"
+        try:
+            with self.assertRaises(engine.Paused):
+                RemoteRunner(self.plugin, target).process(str(self.source), self.settings, str(output),
+                    on_state=lambda value: state.update(value))
+            jid = state["remote_id"]
+            job = self.controller.get(f"/v1/jobs/{jid}")
+            self.assertEqual(job["status"], "error")
+            spool = self.folder / "worker" / jid
+            saved = json_read(spool / "worker.json")
+            self.assertEqual(saved["checkpoint"]["fake_done"], 3)
+            self.assertTrue(self.source.exists())
+            # Pas de suppression ni boucle de retry automatique après l'erreur.
+            self.worker.step()
+            self.assertEqual(self.controller.get(f"/v1/jobs/{jid}")["status"], "error")
+            allowed.set()
+            RemoteRunner(self.plugin, target).process(str(self.source), self.settings, str(output), state=state)
+            self.assertEqual(output.read_bytes(), b"RESULTAT:" + self.source.read_bytes())
+        finally:
+            stop.set()
+            thread.join(timeout=5)
+        self.assertFalse(errors, errors)
+        self.worker.step()
+        self.assertFalse(spool.exists())
+        self.assertEqual(len(FakeUpscaler.calls), 1)
+
+    def test_paired_worker_address_gpu_and_name_edit_preserves_identity_and_jobs(self):
+        plugin = mod.Plugin(self.folder / "editable-worker")
+        pair = self.controller.post("/v1/controller/pair")
+        with mock.patch(type(plugin).__module__ + ".set_startup"), \
+             mock.patch.object(plugin, "ensure_running"):
+            plugin.join({"code": pairing_code(self.url, self.pin, pair["secret"]),
+                         "name": "Avant", "gpu": "0", "startup": False})
+            before = plugin.config()
+            job = self.create(worker=before["worker_id"], gpu="0")
+            checkpoint = plugin.folder / "worker" / job["id"] / "worker.json"
+            checkpoint.parent.mkdir(parents=True)
+            checkpoint.write_text('{"checkpoint":{"src_done":123}}')
+            plugin.update_worker({"url": self.url.replace("127.0.0.1", "localhost"),
+                                  "name": "Après", "gpu": "1", "startup": False})
+            after = plugin.config()
+            for key in ("pin", "token", "worker_id"):
+                self.assertEqual(before[key], after[key])
+            self.assertEqual(after["gpu"], "1")
+            self.assertEqual(after["name"], "Après")
+            self.assertEqual(json_read(checkpoint)["checkpoint"]["src_done"], 123)
+            self.assertEqual(self.controller.get(f"/v1/jobs/{job['id']}")["settings"]["gpu"], "0")
+            worker = next(w for w in self.hub.workers() if w["id"] == before["worker_id"])
+            self.assertEqual(worker["name"], "Après")
+            self.assertEqual(worker["gpu"], "1")
+            with self.assertRaises(ExtensionError):
+                plugin.update_worker({"url": "http://unsafe.example:55001"})
+            self.assertEqual(plugin.config(), after)
 
     def test_preview_uses_same_remote_pipeline(self):
         job = self.create(kind="preview", time_s=1.5, result_name="preview.png")
@@ -382,6 +463,43 @@ class RemoteTests(unittest.TestCase):
                 thread.join(timeout=5)
                 api._frame_pool.shutdown(wait=False)
 
+    def test_host_preserves_remote_job_on_unexpected_error_until_explicit_cancel(self):
+        from upscaler.webapp import Api
+        with mock.patch.dict(os.environ, {"UPSCALER_DATA_DIR": str(self.folder / "app-data"),
+                                         "APPDATA": str(self.folder / "app-config")}), \
+             mock.patch.object(Api, "_detect_gpus"), mock.patch.object(Api, "_load_settings", return_value=self.settings):
+            api = Api()
+            info = engine.VideoInfo(str(self.source), 32, 24, "25/1", 25, 1, 25, None,
+                                    "progressive", "bt709", "yuv420p", "h264")
+            file = {"id": 1, "name": self.source.name, "path": str(self.source), "status": "Prêt", "state": "ready",
+                    "progress": 0, "res": "32×24", "dur": "00:00:01", "out": "64×48", "size": self.source.stat().st_size,
+                    "output": "", "error": "", "thumb": "", "info": info, "kind": "video", "fps": 25, "job": None}
+            remote = mock.Mock()
+            remote.selected.return_value = self.target()
+            remote.runner.return_value.process.side_effect = OSError("Disque de destination indisponible")
+            api._remote = remote
+            api._files, api._order, api._next_id = {1: file}, [1], 2
+            api._settings.output_dir = str(self.folder / "outputs")
+            api._remote_cache_at = time.monotonic()
+            try:
+                self.assertTrue(api.start())
+                deadline = time.monotonic() + 5
+                while api._running and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertFalse(api._running)
+                self.assertEqual(file["state"], "paused")
+                job = file["job"]
+                self.assertIsNotNone(job)
+                self.assertTrue(Path(job.folder).exists())
+                self.assertEqual(job.data["settings"]["finish"], "auto")
+                remote.abandon.assert_not_called()
+                self.assertTrue(api.cancel())
+                remote.abandon.assert_called_once_with(job)
+                self.assertIsNone(file["job"])
+                self.assertTrue(self.source.exists())
+            finally:
+                api._frame_pool.shutdown(wait=False)
+
     def test_compromised_relay_cannot_make_worker_write_or_delete_arbitrary_paths(self):
         job = self.create()
         sentinel = self.folder / "do-not-delete.txt"
@@ -486,6 +604,43 @@ class PackageTests(unittest.TestCase):
         plugin.start()
         self.assertTrue(plugin.public()["running"])
         plugin.stop()
+
+    def test_controller_port_edit_keeps_pending_jobs_and_pairing(self):
+        import socket
+        self.manager._install_verified(self.raw, self.info)
+        plugin = self.manager.load()
+        def free_port():
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                return sock.getsockname()[1]
+        with mock.patch(type(plugin).__module__ + ".set_startup"):
+            try:
+                plugin.configure_controller({"port": free_port(), "startup": False})
+                config = plugin.config()
+                client = plugin.controller()
+                pair = client.post("/v1/controller/pair")
+                identity = Client(f"https://127.0.0.1:{config['port']}", config["pin"]).post(
+                    "/v1/pair", {"secret": pair["secret"], "name": "GPU"})
+                source = Path(self.tmp.name, "source.mp4")
+                source.write_bytes(b"SOURCE")
+                job = client.post("/v1/controller/jobs", {"request_id": uuid.uuid4().hex,
+                    "worker": identity["id"], "source_path": str(source), "source_size": source.stat().st_size,
+                    "source_sha256": sha256_file(source), "settings": engine.Settings().to_dict(),
+                    "result_name": "result.mp4"})
+                # Avant le reçu / le nettoyage, révoquer ou changer de rôle est interdit.
+                with self.assertRaises(ExtensionError):
+                    client.post("/v1/controller/revoke", {"id": identity["id"]})
+                with self.assertRaises(ExtensionError):
+                    plugin.before_remove()
+                port = free_port()
+                plugin.configure_controller({"port": port, "url": f"https://freebox.example:{port}"})
+                after = plugin.config()
+                self.assertEqual(after["pin"], config["pin"])
+                self.assertEqual(after["token"], config["token"])
+                self.assertEqual(plugin.controller().get(f"/v1/jobs/{job['id']}")["status"], "queued")
+                self.assertEqual(plugin.controller().get("/v1/controller/state")["workers"][0]["id"], identity["id"])
+            finally:
+                plugin.stop()
 
     def test_private_storage_round_trip(self):
         path = Path(self.tmp.name, "private.dat")

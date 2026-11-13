@@ -101,6 +101,7 @@ function updateExtensions(catalog, remote) {
     setRemoteRole(r.role || 'controller');
     EXT.hydrated = true;
   }
+  renderRemoteGpus();
   $('#rStatus').textContent = r.running ? (r.role === 'controller' ? 'Relais actif' : 'Service actif') : r.role ? 'Service arrêté' : 'À configurer';
   $('#rStatus').classList.toggle('online', !!r.running);
   $('#rService').hidden = !r.role;
@@ -142,11 +143,22 @@ function setRemoteRole(role) {
   $('#rPair').hidden = EXT.role !== 'controller' || EXT.remote.role !== 'controller' || !EXT.remote.running;
   $('#rPairBox').hidden = true;
   $('#rPairCode').value = '';
+  renderRemoteGpus(EXT.hydrated ? $('#rGpu').value : (EXT.remote.gpu || 'auto'));
+}
+
+function renderRemoteGpus(wanted) {
   const gpu = $('#rGpu');
-  const previous = gpu.value;
-  gpu.innerHTML = '<option value="auto">Automatique</option>' + (S.gpus || []).map((g) => `<option value="${esc(g.id)}">${esc(g.id)} · ${esc(g.name)}</option>`).join('');
-  gpu.value = previous || EXT.remote.gpu || 'auto';
-  if (!gpu.value) gpu.value = 'auto';
+  const selected = wanted || gpu.value || 'auto';
+  const list = (S.gpus || []).length ? S.gpus : (EXT.remote.gpus || []);
+  const stamp = JSON.stringify([list, selected]);
+  if (gpu.dataset.stamp === stamp) return;
+  gpu.dataset.stamp = stamp;
+  gpu.innerHTML = '<option value="auto">Automatique</option>' + list.map((g) => `<option value="${esc(g.id)}">${esc(g.id)} · ${esc(g.name)}</option>`).join('');
+  if (selected !== 'auto' && !list.some((g) => String(g.id) === selected)) {
+    // Garder le GPU enregistré même si sa détection n'est pas encore terminée.
+    gpu.add(new Option(`GPU ${selected} · enregistré`, selected));
+  }
+  gpu.value = selected;
 }
 
 async function activateRemote() {
@@ -174,6 +186,7 @@ async function extensionAction(action, values = {}) {
     const response = await API.remote_action(action, values);
     if (!response.ok) { showError('Calcul distant', response.error || 'Action impossible.'); return null; }
     updateExtensions(EXT.catalog, response.remote);
+    if (action === 'startup' || action === 'stop') $('#rSetupStartup').checked = !!response.remote.startup;
     return response;
   } catch (e) { showError('Calcul distant', String(e)); return null; }
   finally { EXT.busy = false; $$('#remoteSetup button').forEach((b) => { b.disabled = false; }); }
@@ -195,7 +208,7 @@ if (window.MockApi) {
     mock.extension_remove = async () => { installed = false; remote = { ...remote, installed: false }; return true; };
     mock.remote_action = async (action, values) => {
       if (action === 'configure_controller') remote = { ...remote, ...values, role: 'controller', enabled: true, running: true, message: 'Mode démo · aucun serveur réel', local_ips: [], workers: [{ id: 'demo-worker', name: 'PC de calcul · démo', online: true, gpu: 'auto', gpus: [{ id: '0', name: 'GPU distant (démonstration)' }] }] };
-      if (action === 'join' || action === 'update_worker') remote = { ...remote, role: 'worker', enabled: true, running: true, name: values.name, startup: values.startup, message: 'Mode démo · aucun calcul distant réel' };
+      if (action === 'join' || action === 'update_worker') remote = { ...remote, role: 'worker', enabled: true, running: true, name: values.name, url: values.url, gpu: values.gpu, startup: values.startup, selected: '', workers: [], message: 'Mode démo · aucun calcul distant réel' };
       if (action === 'select') remote = { ...remote, selected: values.worker };
       if (action === 'startup') remote = { ...remote, startup: values.enabled };
       if (action === 'start') remote = { ...remote, running: true };

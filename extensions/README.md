@@ -31,6 +31,9 @@ cd tests && npm ci && npm test
 En CI, `UPV_EXTENSION_TEST_PACKAGE` pointe vers l'archive construite. `main.py --selftest`
 installe cette archive dans un dossier isolé et teste le vrai chargement dynamique depuis
 l'exe : TLS épinglé, appairage unique, transfert multiblocs, reçu SHA-256 et nettoyage.
+Il lance aussi le même exe dans un véritable processus service détaché, vérifie son API,
+l'absence de fenêtre visible sous Windows, le démarrage idempotent et son arrêt. Le dossier
+des tests est isolé ; aucune inscription au démarrage du compte de build n'est modifiée.
 
 ## Protocole Calcul à distance
 
@@ -58,6 +61,8 @@ ni UPnP, ni DMZ, ni désactivation du pare-feu, ni tunnel tiers ne sont utilisé
   renomme `.partiel` en fichier final, **puis** envoie le reçu. Le relais marque durablement
   la livraison avant de supprimer sa copie ; le GPU ne supprime son dossier qu'au prochain
   reçu `delivered`. Un ACK perdu ou un crash après renommage ne relance pas le calcul.
+- Une erreur de calcul/disque n'est pas un abandon : les copies et checkpoints sont conservés.
+  Seule une nouvelle commande de reprise relance un travail en erreur ; les réglages restent figés.
 - L'abandon est aussi une commande durable. Si le GPU est hors ligne, ses copies ne peuvent
   être effacées physiquement avant sa reconnexion. Révocation/désinstallation sont refusées
   tant qu'un travail attend encore cette confirmation de nettoyage.

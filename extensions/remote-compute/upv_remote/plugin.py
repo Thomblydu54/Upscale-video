@@ -35,7 +35,8 @@ class Plugin:
     def public(self):
         config = self.config()
         status = read_json(self.status_path)
-        alive = time.time() - status.get("updated", 0) < 8 and status.get("running", False)
+        alive = (time.time() - status.get("updated", 0) < 8 and status.get("running", False)
+                 and self._service_locked())
         try:
             ips = [ip for ip in socket.gethostbyname_ex(socket.gethostname())[2]
                    if not ip.startswith("127.")]
@@ -205,15 +206,25 @@ class Plugin:
             self.ensure_running()
             return self.public()
 
+    def _service_locked(self):
+        path = self.folder / "service.lock"
+        if not path.exists():
+            return False
+        try:
+            with ServiceLock(path):
+                return False
+        except ExtensionError:
+            return True
+
     def stop(self, keep_enabled=False):
         config = self.config()
         enabled = config.get("enabled", False)
         config["enabled"] = False
         self._save(config)
         deadline = time.monotonic() + 35
-        while self.public()["running"] and time.monotonic() < deadline:
+        while self._service_locked() and time.monotonic() < deadline:
             time.sleep(0.2)
-        if self.public()["running"]:
+        if self._service_locked():
             raise ExtensionError("Le service enregistre encore son avancement. Réessayez dans quelques secondes.")
         if keep_enabled:
             config["enabled"] = enabled

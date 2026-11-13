@@ -74,7 +74,6 @@ class RemoteRunner:
         stat = os.stat(path)
         fingerprint = [stat.st_size, stat.st_mtime_ns]
         if self._state.get("remote_source_stat") not in (None, fingerprint):
-            self.plugin.command(self.target["request_id"], "cancel")
             raise engine.UpscaleError("La source a changé depuis le lancement de ce travail distant.")
         sha = self._state.get("remote_source_sha256")
         if not sha:
@@ -127,8 +126,11 @@ class RemoteRunner:
                 if status in ("ready", "delivered", "cleaned"):
                     return self._receive(job, output)
                 if status == "error":
-                    self.plugin.command(self.target["request_id"], "cancel")
-                    raise engine.UpscaleError(job.get("error") or "Le calcul sur l'autre PC a échoué.")
+                    self.log("Erreur sur le PC de calcul : " + (job.get("error") or "Calcul interrompu."))
+                    self.log("Les fichiers et les réglages sont conservés. Corrigez l'erreur puis cliquez sur Reprendre, ou abandonnez explicitement ce travail.")
+                    self._emit("Erreur distante · fichiers conservés, consulter le journal",
+                               float(self._state.get("remote_fraction", 0.02)))
+                    raise engine.Paused()
                 if status == "cancelled":
                     raise engine.Cancelled()
                 stage = p.get("stage") or "En attente du PC de calcul"

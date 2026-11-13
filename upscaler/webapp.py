@@ -286,8 +286,14 @@ class Api:
                     if not os.path.exists(f["path"]):
                         f["error"] = ("Le fichier source est introuvable (déplacé ou supprimé) : "
                                       "le traitement en pause ne peut pas être repris.\n" + f["path"])
-                    f["job"] = None
-                    self._delete_job(job)
+                    if job.data.get("remote"):
+                        # Source déplacée/illisible : conserver les copies du PC GPU tant
+                        # que l'utilisateur n'a pas demandé l'abandon de ce travail.
+                        f.update(state="paused", status="Source indisponible · en pause")
+                        self._jobs.update(job, status="paused")
+                    else:
+                        f["job"] = None
+                        self._delete_job(job)
             self._log(f"Impossible de lire {f['name']} : {e}")
 
     # ------------------------------------------------------------------ API JS
@@ -325,10 +331,12 @@ class Api:
             events, self._events = self._events, []
             logs, self._logs = self._logs, []
             files = [self._file_public(self._files[i]) for i in self._order]
-            return {"events": events, "logs": logs, "files": files, "running": self._running,
-                    "task": self._task, "progress": self._progress, "pending": self._pending_count(),
-                    "pausing": self._running and self._pause_req,
-                    "extensions": self._extensions.public(), "remote": self._remote_public()}
+            result = {"events": events, "logs": logs, "files": files, "running": self._running,
+                      "task": self._task, "progress": self._progress, "pending": self._pending_count(),
+                      "pausing": self._running and self._pause_req}
+        # Pas de verrou API pendant une installation : le gestionnaire peut lui-même
+        # émettre un journal, et ne doit pas attendre un verrou tenu par poll().
+        return {**result, "extensions": self._extensions.public(), "remote": self._remote_public()}
 
     # ---- extensions officielles ------------------------------------------------
     def _remote_public(self) -> dict:
@@ -477,6 +485,9 @@ class Api:
         modifier les réglages ensuite ne change rien pour eux (même après un redémarrage).
         Les traitements en pause sont repris là où ils s'étaient arrêtés."""
         with self._lock:
+            if self._extension_busy:
+                self._toast("info", "Installation en cours", "Patientez avant de lancer de nouveaux travaux.")
+                return False
             if self._running and self._task != "queue":
                 return False
             if self._running and self._pause_req:
@@ -932,6 +943,16 @@ class Api:
                         self._compute_out(f)
                     self._log("Traitement annulé.")
                 except Exception as e:  # noqa: BLE001
+                    if job.data.get("remote"):
+                        # Une erreur n'est pas un abandon : ne pas effacer sur l'autre PC
+                        # un résultat non récupéré ou ses checkpoints.
+                        paused = True
+                        with self._lock:
+                            f.update(state="paused", status="Erreur distante · en pause", error=str(e))
+                            self._jobs.update(job, status="paused", progress=f.get("progress", 0.0))
+                        self._log(f"✖ {f['name']} : {e} — fichiers distants conservés.")
+                        self._toast("error", "Travail distant en pause", str(e))
+                        break
                     failed += 1
                     with self._lock:
                         f.update(state="error", status="Erreur", error=str(e), job=None)

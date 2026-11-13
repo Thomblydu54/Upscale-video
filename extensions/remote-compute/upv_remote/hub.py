@@ -183,6 +183,10 @@ class Hub:
                 if desired == "cancel":
                     job.update(status="cancelled", source_path="")
                     shutil.rmtree(self.folder / jid, ignore_errors=True)
+                elif desired == "run" and job["status"] == "error":
+                    # Seule une nouvelle demande explicite de reprise relance une erreur.
+                    # Les copies et checkpoints restent en place jusque-là.
+                    job.update(status="queued", error="")
                 self.save()
             return self.public_job(job)
 

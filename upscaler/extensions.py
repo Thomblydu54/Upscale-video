@@ -225,10 +225,11 @@ class ExtensionManager:
         save_private(path, config)
         deadline = time.monotonic() + 35
         while time.monotonic() < deadline:
-            state = read_json(folder / "status.json")
-            if not state.get("running") or time.time() - state.get("updated", 0) > 8:
-                return
-            time.sleep(0.2)
+            try:
+                with ServiceLock(folder / "service.lock"):
+                    return
+            except ExtensionError:
+                time.sleep(0.2)
         raise ExtensionError("Le service termine sa mise en pause. Réessayez la réparation ensuite.")
 
     def _unload(self, key):
@@ -308,7 +309,49 @@ def selftest_package(path: str) -> str:
                                             "sha256": hashlib.sha256(raw).hexdigest()})
             plugin = manager.load()
             module = __import__(type(plugin).__module__.rsplit(".", 1)[0] + ".selftest", fromlist=["run"])
-            return module.run()
+            protocol = module.run()
+            # Vrai lancement du même exe en mode service (pas seulement un objet dans
+            # le processus de test). Aucun accès à la clé de démarrage HKCU du compte CI.
+            import secrets
+            import socket
+            from .extension_runtime import tls_identity
+            with socket.socket() as sock:
+                sock.bind(("127.0.0.1", 0))
+                port = sock.getsockname()[1]
+            plugin._save({"role": "controller", "enabled": True, "port": port,
+                          "pin": tls_identity(plugin.folder), "token": secrets.token_urlsafe(32),
+                          "startup": False, "revision": "packaged-selftest"})
+            try:
+                plugin.ensure_running()
+                state = read_json(plugin.status_path)
+                assert state["pid"] != os.getpid(), "Le service n'est pas détaché."
+                assert plugin.controller().get("/v1/controller/state")["workers"] == []
+                plugin.start()
+                assert read_json(plugin.status_path)["pid"] == state["pid"], "Deux services démarrés."
+                if os.name == "nt":
+                    import ctypes
+                    from ctypes import wintypes
+                    user = ctypes.WinDLL("user32", use_last_error=True)
+                    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+                    user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
+                    user.EnumWindows.restype = wintypes.BOOL
+                    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+                    user.IsWindowVisible.argtypes = [wintypes.HWND]
+                    user.IsWindowVisible.restype = wintypes.BOOL
+                    visible = []
+                    @callback
+                    def visit(hwnd, _):
+                        pid = wintypes.DWORD()
+                        user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                        if pid.value == state["pid"] and user.IsWindowVisible(hwnd):
+                            visible.append(hwnd)
+                        return True
+                    assert user.EnumWindows(visit, 0), "Impossible de vérifier les fenêtres du service."
+                    assert not visible, "Le service a ouvert une fenêtre visible."
+            finally:
+                plugin.stop()
+            assert not plugin.public()["running"]
+            return protocol + " · service réel détaché, sans fenêtre, démarrage idempotent et arrêt : OK"
         finally:
             manager._unload("remote-compute")
             if before is None:

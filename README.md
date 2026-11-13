@@ -161,6 +161,9 @@ votre box, votre pare-feu, vos pilotes GPU ni votre débit à distance.
 - Les sources et résultats se transfèrent par blocs avec reprise. Les checkpoints du
   moteur sont conservés sur le PC GPU. Après un arrêt, aucun calcul déjà confirmé n'est
   répété ; les lots non confirmés peuvent être refaits comme dans le traitement local.
+- Une erreur GPU ou disque met le travail **en pause sans effacer les copies ni les
+  checkpoints**. Consultez le journal, corrigez le problème puis cliquez **Reprendre** ;
+  seul un abandon explicite autorise le nettoyage d'un travail non livré.
 - À réception : contrôle **taille + SHA-256**, enregistrement du fichier final, **puis reçu
   de livraison**. Le cache du relais et le dossier complet du travail sur le PC GPU
   (source reçue, segments, résultat) sont alors supprimés. **L'original du PC principal
