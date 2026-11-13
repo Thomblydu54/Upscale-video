@@ -176,6 +176,11 @@ class Api:
         job = f.get("job")
         d["frozen"] = job.data.get("summary", "") if job else ""
         d["resumable"] = bool(job and (job.data.get("state") or {}).get("src_done"))
+        # nettoyage automatique détecté (affiché seulement s'il sera réellement appliqué)
+        cl = f.get("clean")
+        mode = job.data["settings"].get("clean", "off") if job else self._settings.clean
+        d["clean"] = (f"Compression détectée · nettoyage {cl.level}"
+                      if cl is not None and cl.filter and mode == "auto" else "")
         if with_thumb:
             d["thumb"] = f.get("thumb", "")
         return d
@@ -253,6 +258,10 @@ class Api:
             except Exception:
                 f["thumb"] = ""
             self._emit(type="thumb", id=fid, thumb=f["thumb"])
+            try:  # analyse des défauts de compression (quelques images, en arrière-plan)
+                f["clean"] = engine.detect_compression(info)
+            except Exception:  # noqa: BLE001
+                f["clean"] = None
         except Exception as e:  # noqa: BLE001
             with self._lock:
                 job = f.get("job")
@@ -881,7 +890,8 @@ class Api:
             self._emit(type="preview_done", id=fid, before=before, after=after, width=w,
                        height=h, name=f["name"], source=f["res"], output=f"{plan.out_w}×{plan.out_h}",
                        model=settings.model, index=index, time=label,
-                       finish=engine.finish_label(settings) if engine.finish_active(settings) else "")
+                       finish=engine.finish_label(settings) if engine.finish_active(settings) else "",
+                       clean=engine.clean_for(info, settings).level)
         except Cancelled:
             self._emit(type="preview_failed", error="Aperçu annulé.")
         except Exception as e:  # noqa: BLE001

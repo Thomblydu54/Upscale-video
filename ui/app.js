@@ -128,6 +128,7 @@ function applySettings() {
   $('#tile').value = String(st.tile ?? 0);
   $('#tta').checked = !!st.tta;
   $('#autoUpdate').checked = st.auto_update !== false;
+  $('#cleanAuto').checked = st.clean !== 'off';
   const gsel = $('#gpu');
   gsel.value = String(st.gpu ?? 'auto');
   if (!gsel.value) gsel.value = 'auto';
@@ -267,6 +268,7 @@ function bindUi() {
   $('#tile').addEventListener('change', (e) => setSetting('tile', Number(e.target.value)));
   $('#tta').addEventListener('change', (e) => setSetting('tta', e.target.checked));
   $('#autoUpdate').addEventListener('change', (e) => setSetting('auto_update', e.target.checked));
+  $('#cleanAuto').addEventListener('change', (e) => setSetting('clean', e.target.checked ? 'auto' : 'off'));
   $('#version').addEventListener('click', () => API.check_update(true));
   for (const [sel, key] of [['#container', 'container'], ['#speed', 'speed'], ['#deinterlace', 'deinterlace'], ['#interpolation', 'interpolation'], ['#image_format', 'image_format']]) {
     $$(sel + ' button').forEach((b) => b.addEventListener('click', () => setSetting(key, b.dataset.v)));
@@ -454,6 +456,7 @@ function createCard(f) {
     <div class="card-body">
       <div class="card-name"></div>
       <div class="card-meta"><span class="pill"></span><span class="size"></span></div>
+      <div class="card-clean" hidden title="Des défauts de compression (blocs) ont été détectés : ils seront adoucis juste avant l'IA. Désactivable dans les réglages avancés."><svg viewBox="0 0 24 24"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z"/><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z"/></svg><span></span></div>
       <div class="card-frozen" hidden title="Réglages figés au moment du lancement : ils ne changeront plus pour ce fichier, même si vous modifiez les réglages ou redémarrez l'application."><svg viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg><span></span></div>
       <div class="card-actions">
         <button class="btn soft play"><svg class="ic" viewBox="0 0 24 24"><path d="M7 4v16l13-8z"/></svg>Lire</button>
@@ -506,6 +509,9 @@ function updateCard(el, f) {
   $('.ring span', el).textContent = pct + '%';
   $('.ring .val', el).style.strokeDashoffset = 201 - 201 * (f.progress || 0);
   $('.card-progress div', el).style.width = (f.state === 'running' || f.state === 'paused' ? pct : 0) + '%';
+  const cleanEl = $('.card-clean', el);
+  cleanEl.hidden = !f.clean;
+  $('span', cleanEl).textContent = f.clean || '';
   const frozen = $('.card-frozen', el);
   frozen.hidden = !f.frozen;
   $('span', frozen).textContent = f.frozen || '';
@@ -741,7 +747,7 @@ function showPreview(ev) {
   const model = S.models.find((m) => m.key === ev.model);
   $('#pvModel').textContent = model ? model.name : '';
   $('#pvChips').innerHTML = `<span>${esc(ev.source)}</span><span class="hl">→ ${esc(ev.output)}</span>` +
-    `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.finish ? `<span class="hl">✦ Finitions ${esc(ev.finish)}</span>` : '')
+    `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.clean ? `<span>Nettoyage ${esc(ev.clean)}</span>` : '') + (ev.finish ? `<span class="hl">✦ Finitions ${esc(ev.finish)}</span>` : '')
     + (ev.time ? `<span>Image ${ev.index + 1} · ${esc(ev.time)}</span>` : '');
   $('#pvBack').hidden = !!PK.isImage || !ev.time;
   CMP.w = ev.width; CMP.h = ev.height; CMP.x = 0.5;

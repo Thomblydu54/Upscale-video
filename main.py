@@ -285,6 +285,47 @@ def selftest(report_path: str) -> int:
 
     check("finitions (filtres)", finish_filters)
 
+    def compression_clean():
+        """Détection des défauts de compression + traitement complet avec nettoyage (pp7)."""
+        tmp = tempfile.mkdtemp(prefix="upv_selftest_")
+        ff = tools.find_tool("ffmpeg")
+
+        def make(name, src, *codec):
+            path = os.path.join(tmp, name)
+            tools.run([ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src,
+                       *codec, path], check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return path
+
+        clean = make("propre.mp4", "testsrc2=size=320x240:rate=10:duration=1", "-pix_fmt", "yuv420p")
+        blocky = make("blocs.avi", "mandelbrot=size=320x240:rate=10", "-t", "1",
+                      "-c:v", "mpeg4", "-q:v", "20")
+        photo = make("photo.jpg", "mandelbrot=size=320x240", "-frames:v", "1", "-q:v", "25")
+        res = []
+        for path, expect in ((clean, False), (blocky, True), (photo, True)):
+            ci = engine.detect_compression(engine.probe(path))
+            if bool(ci.filter) != expect:
+                raise RuntimeError(f"{os.path.basename(path)} : {ci.label()} ({ci.reason})")
+            res.append(f"{os.path.basename(path)} → {ci.label()}")
+        logs = []
+        try:
+            out = engine.Upscaler(on_log=logs.append).process(
+                blocky, engine.Settings(output_size="x1", interpolation="x2", gpu="-1"))
+        except engine.UpscaleError as e:
+            if "RIFE" in str(e):
+                return "; ".join(res) + " (traitement complet ignoré : RIFE indisponible)"
+            raise
+        if not any(l.startswith("Nettoyage auto : nettoyage") for l in logs):
+            raise RuntimeError("nettoyage non appliqué : " + " | ".join(logs[-5:]))
+        r = tools.run([tools.find_tool("ffprobe"), "-v", "error", "-count_frames", "-select_streams",
+                       "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", out],
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if r.stdout.decode().strip() != "20":
+            raise RuntimeError(f"attendu 20 images, obtenu {r.stdout.decode().strip()!r}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return "; ".join(res) + "; traitement complet nettoyé → 20 images"
+
+    check("nettoyage des vidéos compressées", compression_clean)
+
     # --- mises à jour : téléchargement + vérification + échange d'un exe en cours d'exécution
     from upscaler import updater
     try:

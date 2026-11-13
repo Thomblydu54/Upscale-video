@@ -64,7 +64,9 @@ class Job:
     @property
     def settings(self) -> Settings:
         """Copie neuve des réglages figés (ne partage rien avec l'interface)."""
-        return Settings.from_dict(dict(self.data["settings"]))
+        data = dict(self.data["settings"])
+        data.setdefault("clean", "off")  # traitement créé avant l'option : réglages inchangés
+        return Settings.from_dict(data)
 
     @property
     def folder(self) -> str:

@@ -593,3 +593,9 @@ input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139,9
 .fin-slider.warmth input[type=range] { background: linear-gradient(90deg, #60a5fa, rgba(255,255,255,.12) 50%, #fbbf24); }
 .fin-slider.warmth .range-scale { margin-top: 7px; }
 .finish.on .section-title .hint { color: var(--cyan); font-weight: 600; }
+
+/* ---- nettoyage automatique (carte) ---- */
+.card-clean { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 11px; color: var(--cyan); }
+.card-clean[hidden] { display: none; }
+.card-clean svg { flex: none; width: 12px; height: 12px; fill: currentColor; opacity: .9; }
+.card-clean span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

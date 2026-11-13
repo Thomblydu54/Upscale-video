@@ -163,6 +163,8 @@ class Settings:
     finish_contrast: int = 0    # 0..100  contraste (courbe en S)
     finish_glow: int = 0        # 0..100  halo lumineux
     finish_warmth: int = 0      # -100 (froid / bleu) .. 100 (chaud / doré)
+    # nettoyage des défauts de compression avant l'IA (détection automatique par fichier)
+    clean: str = "auto"         # auto | off
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -186,6 +188,8 @@ class Settings:
             s.interpolation = cls.interpolation
         if s.image_format not in dict(IMAGE_FORMATS):
             s.image_format = cls.image_format
+        if s.clean not in ("auto", "off"):
+            s.clean = cls.clean
         if s.finish not in FINISH_LABELS:
             s.finish = cls.finish
         preset = next((v for k, _, v in FINISH_PRESETS if k == s.finish), None)
@@ -371,6 +375,7 @@ class Plan:
     upscale: bool = True        # False : taille d'origine (interpolation seule)
     interp: int = 1             # multiplicateur d'images par seconde (RIFE)
     out_fps: str = ""           # fréquence de sortie (fraction)
+    clean: str = ""             # filtre de nettoyage des défauts de compression (vide = aucun)
 
 
 def _even(x: float) -> int:
@@ -591,6 +596,151 @@ def first_frame_index(info: VideoInfo) -> int:
     import re
     m = re.search(r"\bn:\s*0\s+pts:\s*(-?\d+)", proc.stderr.decode("utf-8", "replace"))
     return int(m.group(1)) if m else 0
+
+
+# --------------------------------------------------------------------------------------
+# Nettoyage automatique des défauts de compression (blocs, halos autour des contours)
+# --------------------------------------------------------------------------------------
+
+# codecs sans filtre anti-blocs intégré : les blocs 8x8 restent visibles dans l'image décodée
+_BLOCKY_CODECS = {"mpeg4", "mpeg2video", "mpeg1video", "msmpeg4v1", "msmpeg4v2", "msmpeg4v3",
+                  "h261", "h263", "h263p", "h263i", "flv1", "mjpeg", "wmv1", "wmv2", "rv10",
+                  "rv20", "svq1", "svq3", "cinepak", "theora", "mpeg2video_vdpau"}
+# codecs de haute qualité / sans perte : jamais de nettoyage
+_CLEAN_CODECS = {"prores", "dnxhd", "ffv1", "huffyuv", "ffvhuff", "utvideo", "rawvideo", "png",
+                 "apng", "qtrle", "cfhd", "v210", "r210", "magicyuv", "bmp", "tiff", "gif", "lagarith"}
+_CLEAN_CACHE: dict = {}
+
+
+@dataclass
+class CleanInfo:
+    filter: str = ""      # ex. "pp7=qp=5:mode=medium" ; vide = rien à nettoyer
+    level: str = ""       # "" | "léger" | "moyen" | "fort"
+    reason: str = ""      # explication courte (journal / interface)
+
+    def label(self) -> str:
+        return f"nettoyage {self.level}" if self.level else "aucun nettoyage nécessaire"
+
+
+def _clean_from_score(score: float, reason: str, image: bool = False) -> CleanInfo:
+    """Score de « blocs » (filtre blockdetect) → force du filtre pp7 (adoucit les blocs 8x8 et
+    les halos). Étalonné sur des vidéos MPEG-4 / MPEG-2 / H.264 et des JPEG de qualité connue :
+    force optimale ≈ 0,7 × score, plafonnée à 10 (mesures SSIM / PSNR par rapport à l'original
+    propre : au-delà, le gain ne progresse plus et les détails fins commencent à s'effacer).
+    Pour les photos JPEG (blocs mesurés plus fortement), l'optimum est ≈ 0,45 × score."""
+    if score < (4.0 if image else 2.5):
+        return CleanInfo(reason=reason)
+    qp = max(2, min(10, int(round(score * (0.45 if image else 0.7)))))
+    level = "léger" if qp <= 3 else ("moyen" if qp <= 7 else "fort")
+    return CleanInfo(f"pp7=qp={qp}:mode=medium", level, reason)
+
+
+def detect_compression(info: VideoInfo) -> CleanInfo:
+    """Mesure les défauts de compression sur quelques images de la vidéo (ou sur l'image).
+
+    - codecs sans anti-blocs (MPEG-2 / DVD, MPEG-4 / DivX / Xvid, vieux formats, photos JPEG) :
+      les blocs 8x8 sont mesurés directement ;
+    - codecs modernes (H.264, H.265, VP9, AV1…) : ils lissent déjà les blocs eux-mêmes, et l'IA
+      gère très bien ce qui reste ; on ne nettoie que si des blocs restent nettement visibles ET
+      que la vidéo est vraiment très compressée (quantification élevée / débit très faible)."""
+    try:
+        st = os.stat(info.path)
+        key = (os.path.abspath(info.path), st.st_size, int(st.st_mtime))
+    except OSError:
+        key = None
+    if key and key in _CLEAN_CACHE:
+        return _CLEAN_CACHE[key]
+    res = _detect_compression(info)
+    if key:
+        _CLEAN_CACHE[key] = res
+    return res
+
+
+def _detect_compression(info: VideoInfo) -> CleanInfo:
+    codec = (info.codec or "").lower()
+    if codec in _CLEAN_CODECS or (info.is_image and codec != "mjpeg"):
+        return CleanInfo(reason="source sans perte ou de haute qualité")
+    if info.is_image:
+        times = [0.0]
+    else:
+        d = info.duration or 0.0
+        times = [d * x for x in (0.12, 0.3, 0.5, 0.7, 0.88)] if d > 2 else [0.0]
+    ffmpeg = tools.find_tool("ffmpeg")
+    import re
+    blocks, blocks8, qps = [], [], []
+    for t in times:
+        try:
+            proc = tools.run([ffmpeg, "-hide_banner", "-nostdin", "-nostats", "-loglevel", "info",
+                              "-export_side_data", "venc_params", *(_seek(t) if t > 0 else []),
+                              "-i", info.path, "-map", "0:v:0", "-frames:v", "3",
+                              "-vf", "showinfo,blockdetect,metadata=mode=print:key=lavfi.block,"
+                                     "blockdetect=period_min=8:period_max=8,"
+                                     "metadata=mode=print:key=lavfi.block",
+                              "-f", "null", "-"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=120)
+        except Exception:  # noqa: BLE001
+            continue
+        err = proc.stderr.decode("utf-8", "replace")
+        vals = [float(v) for v in re.findall(r"lavfi\.block=([\d.]+)", err)]
+        blocks += vals[0::2]
+        blocks8 += vals[1::2]
+        qps += [int(v) for v in re.findall(r"encoding parameters: type 1; qp=(\d+)", err)]
+    if not blocks:
+        return CleanInfo(reason="analyse impossible")
+    b = sum(blocks) / len(blocks)
+    b8 = sum(blocks8) / max(1, len(blocks8))
+    if codec in _BLOCKY_CODECS:
+        # de vrais blocs de compression tombent pile sur la grille 8x8 ; des graphismes nets
+        # (titres, interface…) donnent un score « toutes périodes » bien plus élevé
+        if b8 < 0.85 * b and not info.is_image:
+            return CleanInfo(reason=f"motifs réguliers, pas des blocs de compression ({b:.1f})")
+        return _clean_from_score(b8, f"blocs 8x8 mesurés : {b8:.1f}", image=info.is_image)
+    # codecs modernes avec anti-blocs intégré
+    if b < 2.5:
+        return CleanInfo(reason=f"compression bien maîtrisée ({b:.1f})")
+    heavy = False
+    if qps:
+        q = sum(qps) / len(qps)
+        heavy = q >= 30
+        why = f"blocs {b:.1f}, quantification {q:.0f}"
+    else:
+        try:
+            bpp = os.path.getsize(info.path) * 8 / max(1e-6, info.duration * info.width
+                                                       * info.height * info.fps_float)
+        except (OSError, ZeroDivisionError):
+            bpp = 1.0
+        heavy = bpp < 0.05
+        why = f"blocs {b:.1f}, {bpp:.3f} bit/pixel"
+    if not heavy:
+        return CleanInfo(reason=f"compression bien maîtrisée ({why})")
+    return _clean_from_score(b, why)
+
+
+def apply_clean(plan: Plan, clean: str) -> Plan:
+    """Insère le nettoyage avant la conversion en RGB (donc à la résolution d'origine, avant
+    l'IA et avant l'interpolation). Filtre purement spatial : aucune influence sur la reprise."""
+    if not clean or plan.clean:
+        return plan
+    parts = [p for p in plan.decode_filter.split(",") if p]
+    i = next((k for k, p in enumerate(parts) if not p.startswith("bwdif")), len(parts))
+    parts.insert(i, clean)
+    plan.decode_filter = ",".join(parts)
+    plan.clean = clean
+    return plan
+
+
+def clean_for(info: VideoInfo, settings: Settings) -> CleanInfo:
+    """Nettoyage à appliquer à ce fichier avec ces réglages (« off » → jamais)."""
+    if settings.clean != "auto":
+        return CleanInfo(reason="désactivé")
+    return detect_compression(info)
+
+
+def raw_decode_filter(plan: Plan) -> str:
+    """Filtre de décodage SANS le nettoyage (image « avant » de l'aperçu)."""
+    if not plan.clean:
+        return plan.decode_filter
+    return ",".join(p for p in plan.decode_filter.split(",") if p and p != plan.clean)
 
 
 def finish_active(settings: Settings) -> bool:
@@ -1007,13 +1157,26 @@ class Upscaler:
         if proc.returncode != 0 or not os.path.isfile(src):
             raise UpscaleError("Extraction de l'image impossible :\n"
                                + proc.stderr.decode("utf-8", "replace")[-800:])
+        ai_src = src  # image envoyée à l'IA (nettoyée si besoin) ; `src` reste l'original
+        cl = clean_for(info, settings)
+        if cl.filter:
+            self.on_log(f"Aperçu : compression détectée ({cl.reason}) → {cl.label()} avant l'IA…")
+            ai_src = os.path.join(folder, f"{stem}_nettoyee.png")
+            apply_clean(plan, cl.filter)
+            proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                              *_seek(t), "-i", path, "-frames:v", "1",
+                              "-vf", plan.decode_filter, ai_src],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if proc.returncode != 0 or not os.path.isfile(ai_src):
+                raise UpscaleError("Nettoyage de l'image impossible :\n"
+                                   + proc.stderr.decode("utf-8", "replace")[-800:])
 
         self.on_log("Aperçu : passage dans l'IA…")
         if os.path.exists(ai):
             os.remove(ai)
         log = os.path.join(folder, "realesrgan.log")
         with open(log, "wb") as lf:
-            p = self._register(tools.popen(build_ai_cmd(settings, plan, src, ai),
+            p = self._register(tools.popen(build_ai_cmd(settings, plan, ai_src, ai),
                                            stdout=lf, stderr=subprocess.STDOUT,
                                            stdin=subprocess.DEVNULL))
             p.wait()
@@ -1085,6 +1248,20 @@ class Upscaler:
                         f"{float(Fraction(plan.out_fps)):.3f} images/s")
         for n in plan.notes:
             self.on_log("Note : " + n)
+        # nettoyage des défauts de compression : décidé une fois pour toutes au début du
+        # traitement, puis conservé dans l'état de reprise (même résultat après une pause)
+        st0 = state if state is not None else {}
+        if settings.clean != "auto":
+            clean = ""
+        elif "clean" in st0:
+            clean = st0["clean"] or ""
+        elif st0.get("src_done"):
+            clean = ""  # traitement commencé avant l'existence du nettoyage : on n'y touche pas
+        else:
+            cl = detect_compression(info)
+            clean = cl.filter
+            self.on_log(f"Nettoyage auto : {cl.label()} – {cl.reason}")
+        apply_clean(plan, clean)
         if finish_active(settings):
             self.on_log(f"Finitions : {finish_label(settings)} (netteté {settings.finish_sharp}, "
                         f"couleurs {settings.finish_color}, contraste {settings.finish_contrast}, "
@@ -1098,6 +1275,7 @@ class Upscaler:
             job_dir = tools.make_work_dir("upv_job_", settings.temp_dir or None)
         os.makedirs(job_dir, exist_ok=True)
         state = self._check_state(state if state is not None else {}, job_dir, plan)
+        state["clean"] = clean
         self._state, self._job_dir = state, job_dir
         self._on_state = on_state or (lambda st: None)
         self._samples, self._t_start, self._last_report = collections.deque(), time.monotonic(), 0.0

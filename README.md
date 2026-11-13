@@ -48,6 +48,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    - glissez sur la pellicule, ou utilisez ← → (image par image) et Maj + ← → (±1 seconde) ;
    - saisissez un temps exact (ex. `1:23`), ou tirez une image au hasard ;
    - cliquez enfin sur **Améliorer cette image avec l'IA**. Le comparateur avant / après s'ouvre, et « Changer d'image » permet d'en essayer une autre.
+   - **Nettoyage automatique des vidéos compressées** (activé par défaut, réglages avancés) : l'application mesure les blocs de compression de chaque fichier. Elle ne les adoucit avant l'IA que lorsqu'ils sont réellement visibles (vieux formats, DVD, DivX, JPEG compressés, H.264 très dégradé). La carte indique alors « Compression détectée · nettoyage léger / moyen / fort ».
    - **Finitions (optionnel)** : section à part, désactivée par défaut. Elle ajoute des retouches après l'IA : netteté, couleurs, contraste, halo lumineux et teinte chaude ou froide. Six préréglages sont proposés (Éclatant, Glow anime, Cinéma, Doré, Glacé, Netteté seule), et chaque curseur peut aussi se régler à la main (« Personnalisé »). L'aperçu IA montre l'image originale à gauche et le résultat IA + finitions à droite. Quand les finitions sont désactivées, le résultat est exactement le même qu'avant cette option.
 5. Cliquez sur **Lancer l'upscale**. La vidéo finale est enregistrée à côté de l'originale, sous le nom `nom_upscaled_3840x2160.mp4`.
 
@@ -98,6 +99,7 @@ vidéo ──ffmpeg──▶ images PNG ──[RIFE]──Real-ESRGAN (GPU/Vulka
 
 - **Interpolation** : [RIFE ncnn-vulkan](https://github.com/nihui/rife-ncnn-vulkan), modèle RIFE v4.6.
 - **IA** : [Real-ESRGAN ncnn-vulkan](https://github.com/xinntao/Real-ESRGAN-ncnn-vulkan), avec les modèles officiels Real-ESRGAN et les modèles [Upscayl](https://github.com/upscayl/upscayl) *lite* et *standard*.
+- **Nettoyage** : mesure des blocs avec `blockdetect` (+ quantification H.264), puis filtre `pp7` dosé selon la mesure.
 - **Finitions** : filtres FFmpeg `colortemperature`, `curves`, `vibrance`, `cas` (netteté adaptative) et halo par `gblur` + `blend` (mode « écran »), appliqués à la résolution finale.
 - **Vidéo** : [FFmpeg](https://ffmpeg.org) (builds [BtbN](https://github.com/BtbN/FFmpeg-Builds)).
 - **Interface** : HTML/CSS/JS affiché par [pywebview](https://pywebview.flowrl.com) (WebView2). L'interface de secours utilise Tkinter avec le thème Sun Valley. L'exe est empaqueté avec PyInstaller.

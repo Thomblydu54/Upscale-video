@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## v1.6.0
+- **Nettoyage automatique des vidéos compressées** (activé par défaut) : chaque fichier est analysé à l'ajout. Si des blocs de compression sont visibles, ils sont adoucis juste avant l'IA, avec une force adaptée (léger, moyen ou fort). Sinon, rien n'est modifié.
+  - Ça concerne surtout les vieux formats (DVD / MPEG-2, DivX / Xvid / MPEG-4, caméscopes, vieux téléphones), les photos JPEG compressées et les vidéos H.264 très dégradées.
+  - Les vidéos récentes bien encodées (H.264 / H.265 / VP9 / AV1) restent intactes : leur compression est déjà lissée et l'IA gère très bien le reste.
+  - La carte du fichier indique « Compression détectée · nettoyage … ». L'aperçu IA montre l'original non retouché à gauche.
+  - Le nettoyage est figé avec les autres réglages au lancement et conservé après une pause. Il peut être désactivé dans les réglages avancés.
+- Les traitements en pause créés avec une version précédente reprennent sans nettoyage, comme prévu au moment du clic.
+
 ## v1.5.0
 - **Nouvelle section « Finitions » (optionnelle, désactivée par défaut)** : des retouches appliquées après l'IA, à la résolution finale.
   - Réglages : netteté, couleurs, contraste, halo lumineux (« glow ») et teinte chaude ou froide.
