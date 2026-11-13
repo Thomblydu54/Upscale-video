@@ -287,6 +287,7 @@ class Api:
             "speeds": [{"key": k, "label": lbl} for k, lbl in SPEEDS],
             "interpolations": [{"key": k, "label": lbl} for k, lbl in INTERPOLATIONS],
             "image_formats": [{"key": k, "label": lbl} for k, lbl in IMAGE_FORMATS],
+            "finishes": [{"key": k, "label": lbl, "values": v} for k, lbl, v in engine.FINISH_PRESETS],
             "settings": self._settings.to_dict(),
             "gpus": self._gpus,
             "files": files,
@@ -656,6 +657,8 @@ class Api:
             enc = engine.ENCODERS_BY_KEY.get(st.encoder)
             codec = "H.265" if enc and enc.codec == "hevc" else "H.264"
             parts.append(f"{codec} {st.container.upper()} · CRF {st.quality}")
+        if engine.finish_active(st):
+            parts.append("finitions " + engine.finish_label(st))
         return " · ".join(parts)
 
     def _restore_jobs(self) -> None:
@@ -877,7 +880,8 @@ class Api:
             after = _jpeg_data_uri(ai, w, h, "lanczos")
             self._emit(type="preview_done", id=fid, before=before, after=after, width=w,
                        height=h, name=f["name"], source=f["res"], output=f"{plan.out_w}×{plan.out_h}",
-                       model=settings.model, index=index, time=label)
+                       model=settings.model, index=index, time=label,
+                       finish=engine.finish_label(settings) if engine.finish_active(settings) else "")
         except Cancelled:
             self._emit(type="preview_failed", error="Aperçu annulé.")
         except Exception as e:  # noqa: BLE001

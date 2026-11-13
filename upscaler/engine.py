@@ -77,6 +77,26 @@ INTERPOLATIONS: list[tuple[str, str]] = [
     ("x3", "x3 (ex. 24 → 72 i/s)"),
     ("x4", "x4 (ex. 30 → 120 i/s, pour écran 120 / 144 Hz)"),
 ]
+# Finitions (optionnelles) : retouche appliquée APRÈS l'IA, à la résolution finale.
+# « off » = aucun filtre ajouté : le traitement est strictement identique à celui sans finitions.
+FINISH_KEYS = ("finish_sharp", "finish_color", "finish_contrast", "finish_glow", "finish_warmth")
+FINISH_PRESETS: list[tuple[str, str, dict]] = [
+    ("eclatant", "Éclatant", {"finish_sharp": 45, "finish_color": 55, "finish_contrast": 35,
+                              "finish_glow": 15, "finish_warmth": 0}),
+    ("glow", "Glow anime", {"finish_sharp": 40, "finish_color": 45, "finish_contrast": 25,
+                            "finish_glow": 60, "finish_warmth": 0}),
+    ("cinema", "Cinéma", {"finish_sharp": 30, "finish_color": 20, "finish_contrast": 55,
+                          "finish_glow": 20, "finish_warmth": 15}),
+    ("dore", "Doré", {"finish_sharp": 30, "finish_color": 35, "finish_contrast": 25,
+                      "finish_glow": 40, "finish_warmth": 45}),
+    ("glace", "Glacé", {"finish_sharp": 35, "finish_color": 30, "finish_contrast": 30,
+                        "finish_glow": 35, "finish_warmth": -45}),
+    ("net", "Netteté seule", {"finish_sharp": 60, "finish_color": 0, "finish_contrast": 0,
+                              "finish_glow": 0, "finish_warmth": 0}),
+]
+FINISH_LABELS = {"off": "Désactivées", "custom": "Personnalisé",
+                 **{k: lbl for k, lbl, _ in FINISH_PRESETS}}
+
 RIFE_BIN = "rife-ncnn-vulkan"
 RIFE_MODEL = "rife-v4.6"
 SCENE_THRESHOLD = 0.32  # au-delà : changement de plan (pas d'interpolation entre deux plans)
@@ -136,6 +156,13 @@ class Settings:
     auto_update: bool = True    # recherche de mises à jour au démarrage
     interpolation: str = "off"  # off | x2 | x3 | x4 (RIFE)
     image_format: str = "auto"  # auto | png | jpg | webp (sortie des images)
+    # finitions optionnelles (désactivées par défaut)
+    finish: str = "off"         # off | custom | clé de FINISH_PRESETS
+    finish_sharp: int = 0       # 0..100  netteté (CAS)
+    finish_color: int = 0       # 0..100  couleurs (vibrance)
+    finish_contrast: int = 0    # 0..100  contraste (courbe en S)
+    finish_glow: int = 0        # 0..100  halo lumineux
+    finish_warmth: int = 0      # -100 (froid / bleu) .. 100 (chaud / doré)
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -159,6 +186,15 @@ class Settings:
             s.interpolation = cls.interpolation
         if s.image_format not in dict(IMAGE_FORMATS):
             s.image_format = cls.image_format
+        if s.finish not in FINISH_LABELS:
+            s.finish = cls.finish
+        preset = next((v for k, _, v in FINISH_PRESETS if k == s.finish), None)
+        if preset:  # un préréglage impose ses valeurs ; « custom » garde celles de l'utilisateur
+            for k, v in preset.items():
+                setattr(s, k, v)
+        for k in FINISH_KEYS:
+            lo = -100 if k == "finish_warmth" else 0
+            setattr(s, k, max(lo, min(100, int(getattr(s, k)))))
         return s
 
     @property
@@ -557,6 +593,49 @@ def first_frame_index(info: VideoInfo) -> int:
     return int(m.group(1)) if m else 0
 
 
+def finish_active(settings: Settings) -> bool:
+    return settings.finish != "off" and any(getattr(settings, k) for k in FINISH_KEYS)
+
+
+def finish_filter(settings: Settings, height: int, alpha: bool = False) -> str:
+    """Chaîne de filtres FFmpeg des finitions (images RGB à la taille finale).
+
+    Retourne "" si les finitions sont désactivées : rien n'est alors ajouté au traitement."""
+    if not finish_active(settings):
+        return ""
+    sharp = settings.finish_sharp / 100
+    color = settings.finish_color / 100
+    contrast = settings.finish_contrast / 100
+    glow = settings.finish_glow / 100
+    warmth = settings.finish_warmth / 100
+    chain = ["format=gbrp"]
+    if warmth:
+        # 6500 K = neutre ; plus bas = plus chaud (doré), plus haut = plus froid (bleu)
+        temp = 6500 - warmth * 2500 if warmth > 0 else 6500 - warmth * 5000
+        chain.append(f"colortemperature=temperature={temp:.0f}:mix={0.35 + 0.35 * abs(warmth):.2f}:pl=1")
+    if contrast:
+        d = 0.075 * contrast
+        chain.append(f"curves=master='0/0 0.25/{0.25 - d:.4f} 0.75/{0.75 + d:.4f} 1/1'")
+    if color:
+        chain.append(f"vibrance=intensity={0.9 * color:.3f}")
+    if sharp:
+        chain.append(f"cas=strength={0.9 * sharp:.3f}")
+    graph = ",".join(chain)
+    if glow:
+        sigma = max(2.0, height * 0.012)
+        graph += (f",split[fin_a][fin_b];[fin_b]curves=all='0/0 0.6/0 1/1',"
+                  f"gblur=sigma={sigma:.1f}:steps=2[fin_g];"
+                  f"[fin_a][fin_g]blend=all_mode=screen:all_opacity={0.65 * glow:.3f}")
+    if alpha:  # la transparence est mise de côté puis remise telle quelle
+        graph = (f"format=rgba,split[fin_c][fin_al];[fin_al]alphaextract[fin_am];"
+                 f"[fin_c]{graph}[fin_cf];[fin_cf][fin_am]alphamerge")
+    return graph
+
+
+def finish_label(settings: Settings) -> str:
+    return FINISH_LABELS.get(settings.finish, settings.finish) if finish_active(settings) else ""
+
+
 def build_segment_cmd(info: VideoInfo, plan: Plan, settings: Settings, path: str) -> list:
     """Encode un morceau de la vidéo agrandie (images PNG sur stdin -> Matroska)."""
     args = encoder_args(settings)
@@ -565,9 +644,17 @@ def build_segment_cmd(info: VideoInfo, plan: Plan, settings: Settings, path: str
         del args[i:i + 2]
     return [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
             "-f", "image2pipe", "-framerate", plan.out_fps or info.fps, "-c:v", "png", "-i", "-",
-            "-vf", plan.encode_filter, *args,
+            "-vf", _with_finish(plan, settings), *args,
             "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-color_range", "tv", "-an", "-f", "matroska", path]
+
+
+def _with_finish(plan: Plan, settings: Settings) -> str:
+    """Filtre d'encodage, précédé des finitions si elles sont activées (sinon inchangé)."""
+    fin = finish_filter(settings, plan.out_h)
+    if not fin:
+        return plan.encode_filter
+    return f"scale={plan.out_w}:{plan.out_h}:flags=lanczos,{fin},{plan.encode_filter}"
 
 
 def build_final_cmd(info: VideoInfo, plan: Plan, settings: Settings, list_path: str,
@@ -935,8 +1022,20 @@ class Upscaler:
         if not os.path.isfile(ai):
             raise UpscaleError(self._ai_error_message(log))
 
-        self.on_log("Aperçu : création de la comparaison (gauche = original, droite = IA)…")
         w, h = plan.out_w, plan.out_h
+        fin = finish_filter(settings, h)
+        if fin:
+            self.on_log(f"Aperçu : finitions « {finish_label(settings)} »…")
+            ai_fin = os.path.join(folder, f"{stem}_ia_finitions.png")
+            proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                              "-i", ai, "-vf", f"scale={w}:{h}:flags=lanczos,{fin},format=rgb24",
+                              "-frames:v", "1", "-update", "1", ai_fin],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            if proc.returncode != 0 or not os.path.isfile(ai_fin):
+                raise UpscaleError("Finitions impossibles :\n"
+                                   + proc.stderr.decode("utf-8", "replace")[-800:])
+            ai = ai_fin
+        self.on_log("Aperçu : création de la comparaison (gauche = original, droite = IA)…")
         proc = tools.run([ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
                           "-i", src, "-i", ai, "-filter_complex",
                           f"[0:v]scale={w}:{h}:flags=bicubic[a];"
@@ -986,6 +1085,10 @@ class Upscaler:
                         f"{float(Fraction(plan.out_fps)):.3f} images/s")
         for n in plan.notes:
             self.on_log("Note : " + n)
+        if finish_active(settings):
+            self.on_log(f"Finitions : {finish_label(settings)} (netteté {settings.finish_sharp}, "
+                        f"couleurs {settings.finish_color}, contraste {settings.finish_contrast}, "
+                        f"halo {settings.finish_glow}, teinte {settings.finish_warmth:+d})")
         if info.is_image:
             self._is_image = True
             return self._process_image(info, plan, settings, output)
@@ -1544,6 +1647,9 @@ class Upscaler:
             self._report(1, "Enregistrement", force=True)
             ext = os.path.splitext(output)[1].lower().lstrip(".")
             vf = f"scale={plan.out_w}:{plan.out_h}:flags=lanczos"
+            fin = finish_filter(settings, plan.out_h, alpha=info.has_alpha and ext != "jpg")
+            if fin:  # finitions optionnelles
+                vf += "," + fin
             if ext == "jpg":
                 codec = ["-vf", vf + ",format=yuvj444p", "-c:v", "mjpeg", "-q:v", "2"]
             elif ext == "webp":

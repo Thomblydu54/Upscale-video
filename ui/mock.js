@@ -9,6 +9,34 @@
     { key: 'realesr-animevideov3', name: 'Anime Rapide', sub: 'Dessins animés, 2D, x2/x3/x4', description: 'Très rapide.', scales: [2, 3, 4], speed: 5, quality: 4, icon: 'brush', tag: 'Anime rapide' },
     { key: 'realesrgan-x4plus-anime', name: 'Anime Pro', sub: 'Anime net et fidèle, plus lent', description: 'Plus net, plus lent.', scales: [4], speed: 2, quality: 5, icon: 'star', tag: 'Anime HQ' },
   ];
+  const FINISHES = [
+    ['eclatant', 'Éclatant', { finish_sharp: 45, finish_color: 55, finish_contrast: 35, finish_glow: 15, finish_warmth: 0 }],
+    ['glow', 'Glow anime', { finish_sharp: 40, finish_color: 45, finish_contrast: 25, finish_glow: 60, finish_warmth: 0 }],
+    ['cinema', 'Cinéma', { finish_sharp: 30, finish_color: 20, finish_contrast: 55, finish_glow: 20, finish_warmth: 15 }],
+    ['dore', 'Doré', { finish_sharp: 30, finish_color: 35, finish_contrast: 25, finish_glow: 40, finish_warmth: 45 }],
+    ['glace', 'Glacé', { finish_sharp: 35, finish_color: 30, finish_contrast: 30, finish_glow: 35, finish_warmth: -45 }],
+    ['net', 'Netteté seule', { finish_sharp: 60, finish_color: 0, finish_contrast: 0, finish_glow: 0, finish_warmth: 0 }],
+  ];
+  const finActive = () => settings.finish && settings.finish !== 'off'
+    && ['finish_sharp', 'finish_color', 'finish_contrast', 'finish_glow', 'finish_warmth'].some((k) => Number(settings[k]) !== 0);
+  const finLabel = () => (FINISHES.find((x) => x[0] === settings.finish) || [0, 'Personnalisé'])[1];
+  // démo : simple approximation des finitions avec les filtres du navigateur
+  async function finishFrame(src) {
+    const im = await loadImg(src);
+    const cv = document.createElement('canvas'); cv.width = im.width; cv.height = im.height;
+    const ctx = cv.getContext('2d');
+    const w = Number(settings.finish_warmth) / 100;
+    ctx.filter = `saturate(${1 + Number(settings.finish_color) / 100}) contrast(${1 + Number(settings.finish_contrast) / 300})`
+      + (w > 0 ? ` sepia(${w * 0.35})` : w < 0 ? ` hue-rotate(${w * 12}deg)` : '');
+    ctx.drawImage(im, 0, 0);
+    const g = Number(settings.finish_glow) / 100;
+    if (g > 0) {
+      ctx.filter = `blur(${Math.round(im.height * 0.012)}px) brightness(0.9)`;
+      ctx.globalCompositeOperation = 'screen'; ctx.globalAlpha = 0.45 * g;
+      ctx.drawImage(cv, 0, 0);
+    }
+    return cv.toDataURL('image/jpeg', 0.88);
+  }
   const SIZES = [['x2', 'x2'], ['x3', 'x3'], ['x4', 'x4'], ['720p', '720p'], ['1080p', '1080p'], ['1440p', '1440p'], ['2160p', '4K'], ['4320p', '8K'], ['x1', "Taille d'origine"]];
   const ENCODERS = [
     ['x264', 'H.264 – CPU (compatible partout)'], ['x265', 'H.265/HEVC – CPU (fichiers plus légers)'],
@@ -21,7 +49,7 @@
     { name: 'Vacances_plage_camescope.avi', w: 720, h: 576, dur: '00:12:05', size: 890e6, img: 'family' },
     { name: 'Photo_mariage_1998.jpg', w: 800, h: 450, dur: 'Image', size: 2.4e6, img: 'family', kind: 'image' },
   ];
-  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true, interpolation: 'off', image_format: 'auto' };
+  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true, interpolation: 'off', image_format: 'auto', finish: 'off', finish_sharp: 0, finish_color: 0, finish_contrast: 0, finish_glow: 0, finish_warmth: 0 };
   let files = [];
   let nextId = 1;
   let events = [];
@@ -107,7 +135,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.5.0', tag: 'v1.5.0', current: '1.4.1', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.6.0', tag: 'v1.6.0', current: '1.5.0', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -116,7 +144,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.5.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.6.0' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -127,11 +155,12 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.4.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.5.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
         interpolations: [{ key: 'off', label: 'Désactivée' }, { key: 'x2', label: 'x2' }, { key: 'x3', label: 'x3' }, { key: 'x4', label: 'x4' }],
+        finishes: FINISHES.map(([key, label, values]) => ({ key, label, values })),
         image_formats: [{ key: 'auto', label: 'Identique' }, { key: 'png', label: 'PNG' }, { key: 'jpg', label: 'JPEG' }, { key: 'webp', label: 'WebP' }],
       };
     },
@@ -146,7 +175,12 @@
     async pick_folder(key) { const p = 'D:\\Vidéos\\Upscale'; settings[key] = p; return p; },
     async remove_file(id) { files = files.filter((f) => f.id !== id); return true; },
     async clear_files() { if (!running) files = []; return true; },
-    async set_settings(v) { Object.assign(settings, v); return { ...settings }; },
+    async set_settings(v) {
+      Object.assign(settings, v);
+      const p = FINISHES.find((x) => x[0] === settings.finish);
+      if (p) Object.assign(settings, p[2]);  // comme le moteur : un préréglage impose ses valeurs
+      return { ...settings };
+    },
     async open_output() { events.push({ type: 'toast', kind: 'info', title: 'Mode démo', text: "Dans l'application, le dossier s'ouvre dans l'Explorateur." }); return true; },
     async play() { events.push({ type: 'toast', kind: 'info', title: 'Mode démo', text: "Dans l'application, la vidéo s'ouvre dans votre lecteur." }); return true; },
     async open_url() {},
@@ -178,8 +212,11 @@
       events.push({ type: 'preview_started', id: f.id, name: f.name, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
       log(`Aperçu : ${f.name}, image ${index + 1}`);
       const hq = await renderFrame(f, index, 1280);
+      const fin = finActive();
+      if (fin) log(`Aperçu : finitions « ${finLabel()} »…`);
+      const after = fin ? await finishFrame(hq) : hq;
       blurred(hq, (before, W, H) => setTimeout(() => {
-        events.push({ type: 'preview_done', id: f.id, before, after: hq, width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
+        events.push({ type: 'preview_done', id: f.id, before, after, finish: fin ? finLabel() : '', width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
         running = false; task = '';
       }, 1600));
       return true;
@@ -188,7 +225,8 @@
       const short = { 'upscayl-lite-4x': 'Réaliste Rapide', 'upscayl-standard-4x': 'Réaliste Pro', 'realesrgan-x4plus': 'Real-ESRGAN', 'realesr-animevideov3': 'Anime Rapide', 'realesrgan-x4plus-anime': 'Anime Pro' };
       const summary = (f) => [short[settings.model] || settings.model, (SIZES.find((x) => x[0] === settings.output_size) || [0, settings.output_size])[1],
         ...(f.kind === 'image' ? [`format ${settings.image_format === 'auto' ? 'identique' : settings.image_format.toUpperCase()}`]
-          : [...(settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`])].join(' · ');
+          : [...(settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`]),
+        ...(finActive() ? [`finitions ${finLabel()}`] : [])].join(' · ');
       const fresh = files.filter((f) => ['ready', 'error', 'cancelled'].includes(f.state) && !f.frozen);
       fresh.forEach((f) => Object.assign(f, { state: 'queued', status: 'En file', progress: 0, frozen: summary(f), frozenOut: outFor(f) }));
       if (running) {

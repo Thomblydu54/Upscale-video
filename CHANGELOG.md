@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## v1.5.0
+- **Nouvelle section « Finitions » (optionnelle, désactivée par défaut)** : des retouches appliquées après l'IA, à la résolution finale.
+  - Réglages : netteté, couleurs, contraste, halo lumineux (« glow ») et teinte chaude ou froide.
+  - Préréglages : Éclatant, Glow anime, Cinéma, Doré, Glacé et Netteté seule. Bouger un curseur passe en « Personnalisé ».
+  - L'**aperçu IA** montre l'original à gauche et l'IA + finitions à droite. La carte indique « finitions … » dans les réglages figés.
+  - Fonctionne aussi pour les images, en conservant la transparence des PNG.
+- Les finitions sont figées au lancement comme les autres réglages, et la pause / reprise les conserve.
+- Aucun réglage existant ne change : finitions désactivées, les commandes de traitement sont identiques à la v1.4.1.
+
 ## v1.4.1
 - **Nettoyage automatique au démarrage** : les fichiers temporaires restés après un plantage, une fermeture forcée ou une coupure de courant sont supprimés. Cela comprend les images des lots en cours (parfois plusieurs Go), l'avancement de traitements qui n'existent plus, les fichiers décompressés de l'exe (~300 Mo par session interrompue), les aperçus de plus de 24 h et les mises à jour non installées. Les fichiers d'une application encore ouverte ne sont jamais touchés.
 - Abandonner ou retirer un traitement en pause supprime aussi la vidéo finale à moitié assemblée, s'il y en a une.

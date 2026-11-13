@@ -5,6 +5,7 @@
     UpscaleVideoAI.exe --selftest FILE  -> vérifications automatiques (utilisé par la CI)
 """
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -259,6 +260,30 @@ def selftest(report_path: str) -> int:
         return f"{len(data)} octets"
 
     check("extraction d'image (aperçu)", frame_grab)
+
+    def finish_filters():
+        """Chaque préréglage de finitions doit passer dans le FFmpeg embarqué (vidéo + image avec alpha)."""
+        tmp = tempfile.mkdtemp(prefix="upv_selftest_")
+        ff = tools.find_tool("ffmpeg")
+        off = engine.Settings.from_dict({"finish": "off", "finish_sharp": 50})
+        if engine.finish_filter(off, 240):
+            raise RuntimeError("finitions désactivées mais filtre non vide")
+        done = []
+        for key, _label, _v in engine.FINISH_PRESETS:
+            st = engine.Settings.from_dict({"finish": key})
+            for alpha, src, out in ((False, "testsrc2=size=320x240:rate=25", "v.mkv"),
+                                    (True, "testsrc2=size=320x240:rate=25,format=rgba", "a.png")):
+                vf = engine.finish_filter(st, 240, alpha=alpha) + (",format=rgba" if alpha else ",format=yuv420p")
+                tools.run([ff, "-hide_banner", "-loglevel", "error", "-y", "-f", "lavfi", "-i", src,
+                           "-frames:v", "3" if not alpha else "1", "-vf", vf,
+                           *(["-update", "1"] if alpha else ["-c:v", "ffv1"]),
+                           os.path.join(tmp, out)], check=True,
+                          stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            done.append(key)
+        shutil.rmtree(tmp, ignore_errors=True)
+        return ", ".join(done)
+
+    check("finitions (filtres)", finish_filters)
 
     # --- mises à jour : téléchargement + vérification + échange d'un exe en cours d'exécution
     from upscaler import updater

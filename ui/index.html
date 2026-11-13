@@ -177,6 +177,44 @@
             </div>
           </div>
 
+          <div class="section finish" id="finishSection">
+            <div class="section-title"><span class="num">6</span> Finitions <span class="opt-tag">Optionnel</span>
+              <span class="hint" id="finishHint">Désactivées</span>
+            </div>
+            <label class="switch-row finish-toggle">
+              <span>
+                <b>Activer les finitions</b>
+                <small>Couleurs, netteté et halo lumineux, appliqués après l'IA. Désactivées : le résultat reste exactement le même qu'avant.</small>
+              </span>
+              <input type="checkbox" id="finishOn"><span class="switch"></span>
+            </label>
+            <div class="finish-body" id="finishBody" hidden>
+              <div class="pills fin-presets" id="finishPresets"></div>
+              <div class="fin-slider" data-k="finish_sharp" title="Fait ressortir les contours (cheveux, broderies…)">
+                <div class="fin-head"><span>Netteté</span><b>0</b></div>
+                <input type="range" min="0" max="100" step="5" value="0">
+              </div>
+              <div class="fin-slider" data-k="finish_color" title="Couleurs plus vives (les couleurs ternes sont renforcées en priorité)">
+                <div class="fin-head"><span>Couleurs</span><b>0</b></div>
+                <input type="range" min="0" max="100" step="5" value="0">
+              </div>
+              <div class="fin-slider" data-k="finish_contrast" title="Noirs plus profonds, blancs plus lumineux">
+                <div class="fin-head"><span>Contraste</span><b>0</b></div>
+                <input type="range" min="0" max="100" step="5" value="0">
+              </div>
+              <div class="fin-slider" data-k="finish_glow" title="Lueur douce autour des zones lumineuses (titres, contre-jours, reflets)">
+                <div class="fin-head"><span>Halo lumineux</span><b>0</b></div>
+                <input type="range" min="0" max="100" step="5" value="0">
+              </div>
+              <div class="fin-slider warmth" data-k="finish_warmth" title="Teinte générale : froide (bleutée) ou chaude (dorée)">
+                <div class="fin-head"><span>Teinte</span><b>0</b></div>
+                <input type="range" min="-100" max="100" step="5" value="0">
+                <div class="range-scale"><span>❄ Froid</span><span>Neutre</span><span>Chaud ☀</span></div>
+              </div>
+              <p class="help">Vérifiez le rendu avec « Aperçu IA » : l'image de droite inclut les finitions. Comme les autres réglages, elles sont figées au lancement de chaque fichier.</p>
+            </div>
+          </div>
+
           <details class="section advanced" id="advanced">
             <summary>
               <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 00.3 1.8l.1.1a2 2 0 11-2.8 2.8l-.1-.1a1.7 1.7 0 00-1.8-.3 1.7 1.7 0 00-1 1.5V21a2 2 0 11-4 0v-.1a1.7 1.7 0 00-1.1-1.5 1.7 1.7 0 00-1.8.3l-.1.1a2 2 0 11-2.8-2.8l.1-.1a1.7 1.7 0 00.3-1.8 1.7 1.7 0 00-1.5-1H3a2 2 0 110-4h.1a1.7 1.7 0 001.5-1.1 1.7 1.7 0 00-.3-1.8l-.1-.1a2 2 0 112.8-2.8l.1.1a1.7 1.7 0 001.8.3H9a1.7 1.7 0 001-1.5V3a2 2 0 114 0v.1a1.7 1.7 0 001 1.5 1.7 1.7 0 001.8-.3l.1-.1a2 2 0 112.8 2.8l-.1.1a1.7 1.7 0 00-.3 1.8V9a1.7 1.7 0 001.5 1H21a2 2 0 110 4h-.1a1.7 1.7 0 00-1.5 1z"/></svg>

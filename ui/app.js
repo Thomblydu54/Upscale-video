@@ -44,6 +44,7 @@ async function boot() {
   buildModels(init.models);
   buildSizes(init.sizes);
   buildEncoders(init.encoders);
+  buildFinishes(init.finishes || []);
   if (init.gpus) setGpus(init.gpus);
   (init.files || []).forEach((f) => f.thumb && S.thumbs.set(f.id, f.thumb));
   applySettings();
@@ -132,6 +133,7 @@ function applySettings() {
   if (!gsel.value) gsel.value = 'auto';
   pathSet('#outdir', '#outdirReset', st.output_dir, "À côté de la vidéo d'origine");
   pathSet('#tmpdir', '#tmpdirReset', st.temp_dir, 'Dossier temporaire de Windows');
+  applyFinish();
   updateSizeHint();
 }
 
@@ -147,6 +149,74 @@ function pathSet(spanSel, resetSel, value, placeholder) {
   $(spanSel).textContent = value || placeholder;
   $(spanSel).style.color = value ? '' : 'var(--muted)';
   $(resetSel).hidden = !value;
+}
+
+/* ------------------------------------------------------------------ finitions (optionnelles) */
+const FIN_KEYS = ['finish_sharp', 'finish_color', 'finish_contrast', 'finish_glow', 'finish_warmth'];
+function buildFinishes(list) {
+  S.finishes = list;
+  const box = $('#finishPresets');
+  box.innerHTML = list.map((p) => `<button data-v="${esc(p.key)}">${esc(p.label)}</button>`).join('')
+    + '<button data-v="custom" class="custom" title="Réglé à la main avec les curseurs">Personnalisé</button>';
+  $$('button', box).forEach((b) => b.addEventListener('click', () => {
+    if (b.dataset.v === 'custom') return;  // « Personnalisé » s'active en bougeant un curseur
+    setSettings({ finish: b.dataset.v });
+  }));
+  $('#finishOn').addEventListener('change', (e) => {
+    if (e.target.checked) {
+      const hasCustom = FIN_KEYS.some((k) => Number(S.settings[k] || 0) !== 0);
+      setSettings({ finish: S.lastFinish || (hasCustom ? 'custom' : (list[0] ? list[0].key : 'custom')) });
+    } else {
+      if (S.settings.finish && S.settings.finish !== 'off') S.lastFinish = S.settings.finish;
+      setSettings({ finish: 'off' });
+    }
+  });
+  $$('.fin-slider').forEach((el) => {
+    const input = $('input', el);
+    input.addEventListener('input', () => paintFinSlider(el, Number(input.value)));
+    input.addEventListener('change', () => {
+      const values = { finish: 'custom' };
+      FIN_KEYS.forEach((k) => { values[k] = Number(S.settings[k] || 0); });
+      values[el.dataset.k] = Number(input.value);
+      setSettings(values);
+    });
+  });
+}
+function paintFinSlider(el, v) {
+  const input = $('input', el);
+  const warm = el.classList.contains('warmth');
+  if (!warm) input.style.setProperty('--p', ((v - Number(input.min)) / (Number(input.max) - Number(input.min))) * 100 + '%');
+  $('.fin-head b', el).textContent = warm ? (v > 0 ? `+${v} chaud` : v < 0 ? `${v} froid` : 'neutre') : String(v);
+}
+function finishLabel(key) {
+  if (!key || key === 'off') return 'Désactivées';
+  if (key === 'custom') return 'Personnalisé';
+  const p = (S.finishes || []).find((x) => x.key === key);
+  return p ? p.label : key;
+}
+function applyFinish() {
+  if (!$('#finishOn')) return;
+  const st = S.settings;
+  const on = !!st.finish && st.finish !== 'off';
+  $('#finishOn').checked = on;
+  $('#finishBody').hidden = !on;
+  $('#finishSection').classList.toggle('on', on);
+  $('#finishHint').textContent = finishLabel(st.finish);
+  segSet('#finishPresets', st.finish);
+  $$('.fin-slider').forEach((el) => {
+    const v = Number(st[el.dataset.k] || 0);
+    $('input', el).value = v;
+    paintFinSlider(el, v);
+  });
+}
+
+async function setSettings(values) {
+  Object.assign(S.settings, values);
+  applySettings();
+  try {
+    S.settings = await API.set_settings(values);
+  } catch (e) { console.error(e); }
+  applySettings();
 }
 
 async function setSetting(key, value) {
@@ -671,7 +741,8 @@ function showPreview(ev) {
   const model = S.models.find((m) => m.key === ev.model);
   $('#pvModel').textContent = model ? model.name : '';
   $('#pvChips').innerHTML = `<span>${esc(ev.source)}</span><span class="hl">→ ${esc(ev.output)}</span>` +
-    `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.time ? `<span>Image ${ev.index + 1} · ${esc(ev.time)}</span>` : '');
+    `<span>${esc(model ? model.name : ev.model)}</span>` + (ev.finish ? `<span class="hl">✦ Finitions ${esc(ev.finish)}</span>` : '')
+    + (ev.time ? `<span>Image ${ev.index + 1} · ${esc(ev.time)}</span>` : '');
   $('#pvBack').hidden = !!PK.isImage || !ev.time;
   CMP.w = ev.width; CMP.h = ev.height; CMP.x = 0.5;
   let loaded = 0;
