@@ -2,3 +2,4 @@ pyinstaller==6.22.3
 pywebview==6.2.1
 sv-ttk==2.6.1
 tkinterdnd2==0.7.0
+cryptography==50.0.2

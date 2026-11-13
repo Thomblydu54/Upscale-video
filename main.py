@@ -85,6 +85,11 @@ def selftest(report_path: str) -> int:
 
     check("probe", probe_clip)
 
+    if os.environ.get("UPV_EXTENSION_TEST_PACKAGE"):
+        from upscaler.extensions import selftest_package
+        check("extension calcul distant (exe)",
+              lambda: selftest_package(os.environ["UPV_EXTENSION_TEST_PACKAGE"]))
+
     # --- interpolation (RIFE)
     check("rife", lambda: tools.find_tool(engine.RIFE_BIN))
 
@@ -534,6 +539,18 @@ def run_modern() -> bool:
 
 def main():
     args = sys.argv[1:]
+    if len(args) >= 2 and args[0] == "--extension-service":
+        # Ce mode est strictement headless : même une erreur ne doit ouvrir aucune fenêtre.
+        close_splash()
+        try:
+            from upscaler.extensions import run_service
+            run_service(args[1])
+        except Exception:
+            try:
+                write_crash_log("Service d'extension :\n" + traceback.format_exc())
+            except Exception:
+                pass
+        return
     if len(args) >= 2 and args[0] == "--idle":  # utilisé par l'auto-test des mises à jour
         close_splash()
         time.sleep(float(args[1]))

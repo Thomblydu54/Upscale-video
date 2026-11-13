@@ -1,5 +1,17 @@
 # Journal des modifications
 
+## v1.9.0
+- **Extensions officielles** : nouveau bouton Extensions, catalogue téléchargeable depuis les releases, installation/mise à jour/désinstallation, vérification SHA-256 du catalogue et des paquets. Le code optionnel se télécharge séparément ; installer n'active rien.
+- Première extension : **Calcul à distance 1.0.0**. Un PC principal héberge un relais privé ; l'autre reçoit les vidéos/images et utilise son propre GPU. Les deux PC peuvent être sur deux réseaux différents, avec une redirection TCP explicite de la Freebox vers le PC principal. Pas de VPS, pas de Tailscale, pas de médias sur GitHub.
+- Appairage confidentiel à usage unique (10 min), HTTPS avec certificat épinglé, jetons distincts protégés par DPAPI sous Windows. Administration du relais limitée au contrôleur local. Aucun bureau distant ni lancement de commandes arbitraires.
+- Choix **Calculer sur** sans changer les options existantes. Destination, réglages et GPU distant figés au lancement, conservés après fermeture/redémarrage. L'aperçu IA peut aussi être calculé à distance.
+- Suivi des phases : transfert, calcul sur l'autre PC, retour, vérification. Reprise des transferts, checkpoints du moteur persistants sur le GPU, reconnexion automatique. Un calcul déjà lancé peut finir si le relais devient inaccessible, puis attend son retour.
+- **Retour sûr puis suppression** : taille/SHA-256 vérifiés, fichier final enregistré, puis reçu de livraison. Le relais supprime son cache et le GPU supprime source reçue + segments + résultat. L'original du PC principal n'est jamais effacé. Pas de suppression automatique d'un résultat non livré.
+- Service sans fenêtre ni console utilisant le même exe, même en erreur. Démarrage facultatif à **l'ouverture de session Windows**, jamais installé silencieusement. Contrôles démarrer/désactiver, révocation et journaux dans l'extension. Le splash de l'exe unique a été retiré pour que le service ne fasse apparaître aucune fenêtre au démarrage.
+- Guide Freebox intégré ; aucune ouverture de port ni modification du pare-feu automatique. La configuration depuis deux réseaux réels doit être validée sur vos PC.
+- Tests : HTTPS réel local, sécurité/appairage, isolation des PC, transferts multiblocs/reprise, crash entre réception et reçu, nettoyage, réglages figés dans la vraie file, pause/redémarrage du moteur avec comparaison image par image ; tests JS de non-régression et auto-test du paquet chargé par l'exe Windows.
+- **Traitement local inchangé** : mêmes modèles, finitions Auto/manuelles, nettoyage, désentrelacement, interpolation/FPS et formats de sortie qu'en v1.8.0.
+
 ## v1.8.0
 - **Finitions automatiques, image par image** : un nouveau bouton « ✦ Auto » dans la section Finitions. L'application analyse **chaque image** de la vidéo (lumière, contraste, couleurs, teinte chaude ou froide, lumières vives) et lui applique la finition qui lui va le mieux :
   - **Doré** : lumière chaude (coucher de soleil, intérieur aux bougies) ;

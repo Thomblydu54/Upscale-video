@@ -49,6 +49,7 @@ async function boot() {
   (init.files || []).forEach((f) => f.thumb && S.thumbs.set(f.id, f.thumb));
   applySettings();
   bindUi();
+  initExtensions(init);
   syncFiles(init.files || []);
   window.__appReady = true;
   pollLoop();
@@ -87,6 +88,7 @@ function buildEncoders(encs) {
 }
 
 function setGpus(gpus) {
+  S.gpus = gpus || [];
   const chip = $('#gpuChip');
   chip.classList.remove('ok', 'bad');
   if (gpus && gpus.length) {
@@ -387,6 +389,7 @@ function bindUi() {
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       if (!$('#errorModal').hidden) $('#errorModal').hidden = true;
+      else if (!$('#extensionsModal').hidden) closeExtensions();
       else if (!$('#notesModal').hidden) $('#notesModal').hidden = true;
       else if (!$('#previewModal').hidden) closePreview();
       else $('#logDrawer').classList.remove('open');
@@ -429,6 +432,7 @@ async function pollLoop() {
       if (r.logs && r.logs.length) appendLogs(r.logs);
       syncFiles(r.files || []);
       syncRun(r);
+      updateExtensions(r.extensions, r.remote);
     } catch (e) { console.error(e); }
     await sleep(250);
   }
@@ -437,6 +441,7 @@ async function pollLoop() {
 function handleEvent(ev) {
   switch (ev.type) {
     case 'toast': toast(ev.kind, ev.title, ev.text); break;
+    case 'extensions_changed': EXT.rendered = ''; updateExtensions(ev.extensions, null); break;
     case 'gpus': setGpus(ev.gpus); break;
     case 'thumb': if (ev.thumb) { S.thumbs.set(ev.id, ev.thumb); const el = cardEls.get(ev.id); if (el) setThumb(el, ev.thumb); } break;
     case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled && !ev.paused) confetti(); break;
@@ -637,12 +642,13 @@ function syncRun(r) {
     $('#barFill').style.width = (frac * 100).toFixed(1) + '%';
     $('#taskTitle').textContent = S.pausing ? 'Mise en pause… enregistrement de l\'avancement'
       : r.running
-        ? `${p.count > 1 ? `[${p.index}/${p.count}] ` : ''}${p.name} · ${p.stage === 'Finalisation' ? 'finalisation…' : 'amélioration par l\'IA'}`
+        ? `${p.count > 1 ? `[${p.index}/${p.count}] ` : ''}${p.name} · ${p.remote ? p.stage : p.stage === 'Finalisation' ? 'finalisation…' : 'amélioration par l\'IA'}`
         : pausedQ ? pausedTitle : 'Traitement terminé';
     $('#stSpeed').textContent = r.running && p.speed ? `${p.speed} img/s` : '—';
     $('#stElapsed').textContent = p.elapsed || '—';
     $('#stEta').textContent = r.running ? (p.eta || '—') : pausedQ ? '—' : '00:00:00';
-    $('#stFrames').textContent = `${p.done} / ${p.total}`;
+    $('#stFrames').textContent = p.transfer ? `${fmtSize(p.transfer.done)} / ${fmtSize(p.transfer.total)}` : p.total ? `${p.done} / ${p.total}` : '—';
+    $('#stFrames').previousElementSibling.textContent = p.transfer ? 'Transfert' : 'Images';
   } else if (!r.running) {
     const paused = S.files.find((f) => f.state === 'paused' && f.progress > 0);
     const frac = pausedQ && paused ? paused.progress : 0;

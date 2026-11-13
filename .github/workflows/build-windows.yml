@@ -36,17 +36,40 @@ jobs:
         shell: bash
         run: echo "version=$(python -c 'import upscaler; print(upscaler.__version__)')" >> "$GITHUB_OUTPUT"
 
+      - name: Construire les extensions officielles
+        run: python scripts/build_extensions.py
+
+      - name: Tester le protocole distant et la reprise
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/package-lock.json
+
+      - name: Tester l'interface et ses options existantes
+        working-directory: tests
+        run: |
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+
       - name: Construire l'exe (fichier unique)
         run: >
           pyinstaller --noconfirm --clean --onefile --windowed
           --name UpscaleVideoAI
           --icon assets/icon.ico
-          --splash assets/splash.png
           --add-data "bin;bin"
           --add-data "assets;assets"
           --add-data "ui;ui"
           --collect-data sv_ttk
           --collect-all tkinterdnd2
+          --collect-all cryptography
+          --hidden-import http.server
+          --hidden-import http.client
+          --hidden-import socketserver
+          --hidden-import secrets
+          --hidden-import ipaddress
           --distpath dist/onefile
           --workpath build/onefile
           main.py
@@ -61,6 +84,12 @@ jobs:
           --add-data "ui;ui"
           --collect-data sv_ttk
           --collect-all tkinterdnd2
+          --collect-all cryptography
+          --hidden-import http.server
+          --hidden-import http.client
+          --hidden-import socketserver
+          --hidden-import secrets
+          --hidden-import ipaddress
           --distpath dist/onedir
           --workpath build/onedir
           main.py
@@ -70,6 +99,7 @@ jobs:
         shell: pwsh
         run: |
           $env:UPV_CHILD_MARKER = "$PWD\child.txt"
+          $env:UPV_EXTENSION_TEST_PACKAGE = "$PWD\release\remote-compute.upvext"
           $p = Start-Process -FilePath "dist/onefile/UpscaleVideoAI.exe" -ArgumentList "--selftest", "$PWD\selftest.txt" -Wait -PassThru
           if (Select-String -Path selftest.txt -Pattern "update-child: lancé" -Quiet) {
             Start-Sleep -Seconds 20
@@ -116,6 +146,7 @@ jobs:
           
           - \`UpscaleVideoAI.exe\` : un seul fichier, rien à installer.
           - \`UpscaleVideoAI-portable.zip\` : même application en dossier (démarrage plus rapide).
+          - L'extension **Calcul à distance** s'installe depuis **Extensions** dans l'application, sur les deux PC. Les fichiers \`.upvext\` et \`extension-catalog.json\` sont destinés au catalogue automatique.
           
           Nécessite Windows 10/11 64 bits et une carte graphique compatible Vulkan (NVIDIA, AMD ou Intel, pilotes à jour)."
           if gh release view "$TAG" >/dev/null 2>&1; then

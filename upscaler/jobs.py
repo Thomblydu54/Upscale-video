@@ -77,7 +77,8 @@ class JobStore:
     def __init__(self):
         self._lock = threading.RLock()
 
-    def create(self, path: str, output: str, settings: Settings, summary: str = "") -> Job:
+    def create(self, path: str, output: str, settings: Settings, summary: str = "",
+               *, remote: dict | None = None) -> Job:
         jid = time.strftime("%Y%m%d-%H%M%S-") + uuid.uuid4().hex[:6]
         snap = settings.to_dict()  # instantané : copie indépendante des réglages du moment
         if snap.get("temp_dir"):
@@ -87,6 +88,8 @@ class JobStore:
         job = Job({"id": jid, "path": path, "name": os.path.basename(path), "output": output,
                    "settings": snap, "summary": summary, "status": "queued", "state": {},
                    "progress": 0.0, "work": work, "created": time.time()})
+        if remote:
+            job.data["remote"] = dict(remote, request_id=jid)
         os.makedirs(job.folder, exist_ok=True)
         self.save(job)
         return job

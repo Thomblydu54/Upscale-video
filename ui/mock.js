@@ -143,7 +143,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.9.0', tag: 'v1.9.0', current: '1.8.0', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.10.0', tag: 'v1.10.0', current: '1.9.0', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -163,7 +163,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.8.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.9.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],

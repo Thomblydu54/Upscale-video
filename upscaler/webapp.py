@@ -16,6 +16,8 @@ from concurrent.futures import ThreadPoolExecutor
 
 from . import __version__, cleanup, engine, tools, updater
 from .jobs import JobStore
+from .extensions import ExtensionManager
+from .extension_runtime import ExtensionError, atomic_json, private_dir
 from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, OUTPUT_SIZES,
                      SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time, fmt_time_ms)
 
@@ -120,6 +122,15 @@ class Api:
         self._updating = False
         self._frame_pool = ThreadPoolExecutor(max_workers=4)
         self._jobs = JobStore()
+        self._extensions = ExtensionManager(self._log)
+        self._extension_busy = False
+        self._remote = None
+        self._remote_cache = {"installed": False}
+        self._remote_cache_at = 0
+        try:
+            self._remote = self._extensions.load()
+        except Exception as e:
+            self._log("Extension désactivée par sécurité : " + str(e))
         self._pause_req = False
         self._cancel_req = False
         self._closing_ok = False
@@ -175,7 +186,8 @@ class Api:
                                "out", "size", "output", "error", "kind", "fps")}
         job = f.get("job")
         d["frozen"] = job.data.get("summary", "") if job else ""
-        d["resumable"] = bool(job and (job.data.get("state") or {}).get("src_done"))
+        d["resumable"] = bool(job and ((job.data.get("state") or {}).get("src_done")
+                                            or (job.data.get("state") or {}).get("remote_id")))
         # nettoyage automatique détecté (affiché seulement s'il sera réellement appliqué)
         cl = f.get("clean")
         mode = job.data["settings"].get("clean", "off") if job else self._settings.clean
@@ -275,7 +287,7 @@ class Api:
                         f["error"] = ("Le fichier source est introuvable (déplacé ou supprimé) : "
                                       "le traitement en pause ne peut pas être repris.\n" + f["path"])
                     f["job"] = None
-                    self._jobs.delete(job)
+                    self._delete_job(job)
             self._log(f"Impossible de lire {f['name']} : {e}")
 
     # ------------------------------------------------------------------ API JS
@@ -304,6 +316,8 @@ class Api:
             "pending": self._pending_count(),
             "restored": self._restored,
             "install_mode": updater.install_mode(),
+            "extensions": self._extensions.public(),
+            "remote": self._remote_public(),
         }
 
     def poll(self) -> dict:
@@ -313,7 +327,85 @@ class Api:
             files = [self._file_public(self._files[i]) for i in self._order]
             return {"events": events, "logs": logs, "files": files, "running": self._running,
                     "task": self._task, "progress": self._progress, "pending": self._pending_count(),
-                    "pausing": self._running and self._pause_req}
+                    "pausing": self._running and self._pause_req,
+                    "extensions": self._extensions.public(), "remote": self._remote_public()}
+
+    # ---- extensions officielles ------------------------------------------------
+    def _remote_public(self) -> dict:
+        if time.monotonic() - self._remote_cache_at > 1:
+            try:
+                self._remote_cache = self._remote.public() if self._remote else {"installed": False}
+            except Exception as e:
+                self._remote_cache = {"installed": bool(self._remote), "error": str(e)}
+            self._remote_cache_at = time.monotonic()
+        return self._remote_cache
+
+    def extensions_refresh(self) -> dict:
+        return self._extensions.refresh()
+
+    def extension_install(self, key: str) -> bool:
+        with self._lock:
+            if self._extension_busy or self._running:
+                self._toast("info", "Patientez", "Terminez ou mettez le traitement en pause avant d'installer une extension.")
+                return False
+            self._extension_busy = True
+        threading.Thread(target=self._change_extension, args=(str(key), True), daemon=True).start()
+        return True
+
+    def extension_remove(self, key: str) -> bool:
+        with self._lock:
+            if self._extension_busy or self._running or any(
+                    f.get("job") and f["job"].data.get("remote") for f in self._files.values()):
+                self._toast("info", "Extension utilisée", "Terminez ou abandonnez les travaux distants avant de la désinstaller.")
+                return False
+            self._extension_busy = True
+        threading.Thread(target=self._change_extension, args=(str(key), False), daemon=True).start()
+        return True
+
+    def _change_extension(self, key, install):
+        try:
+            if install:
+                self._extensions.install(key)
+            else:
+                self._extensions.remove(key)
+            self._remote = self._extensions.load()
+            self._remote_cache_at = 0
+            self._toast("success", "Extension installée" if install else "Extension désinstallée",
+                        "Configurez son rôle dans Extensions." if install else "Le traitement local reste disponible.")
+        except Exception as e:
+            self._toast("error", "Extensions", str(e))
+            self._log("Extensions : " + str(e))
+        finally:
+            self._extension_busy = False
+            self._emit(type="extensions_changed", extensions=self._extensions.public())
+
+    def remote_action(self, action: str, values=None) -> dict:
+        try:
+            if not self._remote:
+                raise ExtensionError("Installez d'abord l'extension Calcul à distance.")
+            values = values or {}
+            if action in ("configure_controller", "join", "update_worker"):
+                if not values.get("consent"):
+                    raise ExtensionError("L'activation doit être autorisée par le propriétaire de ce PC.")
+                if self._running:
+                    raise ExtensionError("Mettez la file en pause avant de reconfigurer le service.")
+            result = self._remote.action(str(action), values)
+            self._remote_cache_at = 0
+            return {"ok": True, "result": result, "remote": self._remote_public()}
+        except Exception as e:
+            self._log("Calcul distant : " + str(e))
+            return {"ok": False, "error": str(e)}
+
+    def _delete_job(self, job, abandon=True) -> None:
+        if abandon and job.data.get("remote"):
+            if self._remote:
+                self._remote.abandon(job)  # commande durable, même si le service/PC GPU est éteint
+            else:
+                sequence = time.time_ns()
+                atomic_json(private_dir("remote-compute", "commands") / f"{sequence:020d}-{job.id}.json",
+                    {"request_id": job.data["remote"].get("request_id", job.id),
+                     "desired": "cancel", "sequence": sequence})
+        self._jobs.delete(job)
 
     def pick_files(self) -> list:
         import webview
@@ -354,7 +446,7 @@ class Api:
             del self._files[fid]
             self._order.remove(fid)
             if f.get("job"):
-                self._jobs.delete(f["job"])
+                self._delete_job(f["job"])
         return True
 
     def clear_files(self) -> bool:
@@ -363,7 +455,7 @@ class Api:
                 return False
             for f in self._files.values():
                 if f.get("job"):
-                    self._jobs.delete(f["job"])
+                    self._delete_job(f["job"])
             self._files.clear()
             self._order.clear()
         return True
@@ -399,6 +491,11 @@ class Api:
                 else:
                     self._toast("info", "Rien à traiter", "Ajoutez une vidéo ou une image (ou retirez celles déjà terminées).")
                 return False
+            try:
+                remote = self._remote.selected() if self._remote else None
+            except Exception as e:
+                self._toast("error", "Destination distante indisponible", str(e))
+                return False
             snapshot = Settings.from_dict(self._settings.to_dict())  # réglages figés à cet instant
             reserved = {f["job"].output for f in self._files.values() if f.get("job")}
             added = 0
@@ -411,7 +508,10 @@ class Api:
                     f.update(state="error", status="Erreur", error=str(e))
                     continue
                 reserved.add(out)
-                job = self._jobs.create(f["path"], out, snapshot, self._summary(snapshot, f["info"]))
+                summary = self._summary(snapshot, f["info"])
+                if remote:
+                    summary += " · PC distant : " + remote["name"]
+                job = self._jobs.create(f["path"], out, snapshot, summary, remote=remote)
                 f.update(job=job, state="queued", status="En file", progress=0.0, error="", output="")
                 self._compute_out(f)
                 added += 1
@@ -455,7 +555,7 @@ class Api:
                 n = 0
                 for f in self._files.values():
                     if f.get("job") and f["state"] in ("queued", "paused"):
-                        self._jobs.delete(f["job"])
+                        self._delete_job(f["job"])
                         f.update(job=None, state="cancelled", status="Annulé", progress=0.0)
                         self._compute_out(f)
                         n += 1
@@ -486,7 +586,14 @@ class Api:
             self._task = "preview"
             self._progress = None
             settings = Settings.from_dict(self._settings.to_dict())
-        threading.Thread(target=self._run_preview, args=(target, settings, index),
+            try:
+                remote = self._remote.selected() if self._remote else None
+            except Exception as e:
+                self._running = False
+                self._task = ""
+                self._toast("error", "Destination distante indisponible", str(e))
+                return False
+        threading.Thread(target=self._run_preview, args=(target, settings, index, remote),
                          daemon=True).start()
         return True
 
@@ -612,6 +719,8 @@ class Api:
             self._emit(type="update_ready", version=info["version"])
             self._log("Installation de la mise à jour et redémarrage…")
             self._save_settings()
+            if self._remote:
+                self._remote.stop(keep_enabled=True)  # redémarrage sur la nouvelle version, pas un ancien exe bloqué
             time.sleep(1.2)
             updater.apply_and_restart(plan)
             time.sleep(0.3)
@@ -627,6 +736,14 @@ class Api:
         except Exception:
             pass
         self._cleanup()
+        if self._remote:
+            try:
+                if self._remote.config().get("enabled"):
+                    self._remote.ensure_running()
+                    if self._remote.config().get("startup"):
+                        self._remote.set_startup(True)  # actualise le chemin si l'exe a été déplacé
+            except Exception as e:
+                self._log("Service distant : " + str(e))
         self._auto_resume()
         if self._settings.auto_update:
             time.sleep(4)
@@ -635,7 +752,7 @@ class Api:
     # ------------------------------------------------------------------ travail
     def _on_progress(self, fid: int, index: int, count: int):
         def cb(p: engine.Progress):
-            frac = p.done / p.total if p.total else 0.0
+            frac = getattr(p, "fraction", p.done / p.total if p.total else 0.0)
             with self._lock:
                 f = self._files.get(fid)
                 if f:
@@ -644,7 +761,8 @@ class Api:
                 self._progress = {"done": p.done, "total": p.total, "speed": round(p.speed, 2),
                                   "eta": fmt_time(p.eta), "elapsed": fmt_time(p.elapsed),
                                   "fraction": frac, "stage": p.stage, "index": index,
-                                  "count": count, "name": f["name"] if f else ""}
+                                  "count": count, "name": f["name"] if f else "",
+                                  "remote": getattr(p, "remote", False), "transfer": getattr(p, "transfer", None)}
         return cb
 
     def _pending_count(self) -> int:
@@ -768,7 +886,17 @@ class Api:
                     resuming = bool((job.data.get("state") or {}).get("src_done"))
                     f.update(state="running", status="Reprise…" if resuming else "Démarrage…", error="")
                     self._jobs.update(job, status="running")
-                    up = Upscaler(on_log=self._log, on_progress=self._on_progress(fid, index, count))
+                    if job.data.get("remote"):
+                        if not self._remote:
+                            f.update(state="paused", status="Extension distante manquante")
+                            self._jobs.update(job, status="paused")
+                            self._log("Réinstallez Calcul à distance pour reprendre ce travail (aucun repli local automatique).")
+                            paused = True
+                            break
+                        up = self._remote.runner(job.data["remote"], on_log=self._log,
+                                                 on_progress=self._on_progress(fid, index, count))
+                    else:
+                        up = Upscaler(on_log=self._log, on_progress=self._on_progress(fid, index, count))
                     self._upscaler = up
                 self._log(f"──── [{index}/{count}] {f['name']}")
                 self._log("Réglages figés : " + job.data.get("summary", ""))
@@ -784,7 +912,7 @@ class Api:
                     ok += 1
                     with self._lock:
                         f.update(state="done", status="Terminé", progress=1.0, output=out, job=None)
-                        self._jobs.delete(job)
+                        self._delete_job(job, abandon=False)
                     self._last_output_dir = os.path.dirname(out)
                     self._log(f"✔ Terminé : {out}")
                 except engine.Paused:
@@ -800,14 +928,14 @@ class Api:
                     cancelled = True
                     with self._lock:
                         f.update(state="cancelled", status="Annulé", progress=0.0, job=None)
-                        self._jobs.delete(job)
+                        self._delete_job(job)
                         self._compute_out(f)
                     self._log("Traitement annulé.")
                 except Exception as e:  # noqa: BLE001
                     failed += 1
                     with self._lock:
                         f.update(state="error", status="Erreur", error=str(e), job=None)
-                        self._jobs.delete(job)
+                        self._delete_job(job)
                         self._compute_out(f)
                     if isinstance(e, UpscaleError):
                         self._log(f"✖ {f['name']} : {e}")
@@ -817,7 +945,7 @@ class Api:
                 for f in self._files.values():
                     if f.get("job") and f["state"] == "queued":
                         if cancelled:  # « Arrêter » vide aussi la file
-                            self._jobs.delete(f["job"])
+                            self._delete_job(f["job"])
                             f.update(job=None, state="ready", status="Prêt", progress=0.0)
                             self._compute_out(f)
                         elif paused:
@@ -869,8 +997,10 @@ class Api:
         except Exception:  # noqa: BLE001
             os._exit(0)
 
-    def _run_preview(self, fid: int, settings: Settings, index=None) -> None:
+    def _run_preview(self, fid: int, settings: Settings, index=None, remote=None) -> None:
         f = self._files.get(fid)
+        remote_folder = None
+        remote_up = None
         try:
             self._upscaler = Upscaler(on_log=self._log)
             info = f["info"]
@@ -880,13 +1010,24 @@ class Api:
             t = self._frame_time(info, index)
             label = "" if info.is_image else fmt_time_ms(index / info.fps_float)
             self._emit(type="preview_started", id=fid, name=f["name"], index=index, time=label)
-            cmp_, ai = self._upscaler.preview(f["path"], settings, time_s=t)
             plan = engine.make_plan(info, settings)
+            if remote:
+                if not plan.upscale:
+                    raise UpscaleError("L'aperçu nécessite une résolution plus grande que l'original.")
+                remote_up, remote_folder = self._remote.preview(f["path"], settings, t, remote, self._log)
+                self._upscaler = remote_up
+                ai = remote_up.process(f["path"], settings, str(remote_folder / "result.png"))
+                src = str(remote_folder / "original.png")
+                tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",
+                           *engine._seek(t), "-i", f["path"], "-frames:v", "1", "-vf", plan.decode_filter, src],
+                          check=True, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+            else:
+                cmp_, ai = self._upscaler.preview(f["path"], settings, time_s=t)
+                src = cmp_.replace("_comparaison.png", "_source.png")
             w, h = plan.out_w, plan.out_h
             if w > 3840:  # limite d'affichage
                 h = int(round(h * 3840 / w / 2)) * 2
                 w = 3840
-            src = cmp_.replace("_comparaison.png", "_source.png")
             before = _jpeg_data_uri(src, w, h, "bicubic")
             after = _jpeg_data_uri(ai, w, h, "lanczos")
             self._emit(type="preview_done", id=fid, before=before, after=after, width=w,
@@ -902,6 +1043,11 @@ class Api:
             self._log(f"✖ Aperçu : {e}")
             self._emit(type="preview_failed", error=str(e))
         finally:
+            if remote_up:
+                self._remote.command(remote_up.target["request_id"], "cancel")
+            if remote_folder:
+                import shutil
+                shutil.rmtree(remote_folder, ignore_errors=True)
             with self._lock:
                 self._running = False
                 self._task = ""

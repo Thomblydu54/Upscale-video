@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Upscale Video AI</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="stylesheet" href="extensions.css">
 </head>
 <body>
   <!-- Fond animé -->
@@ -57,8 +58,12 @@
         </div>
         <div class="chip subtle">
           <svg class="ic" viewBox="0 0 24 24"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z"/><path d="M9 12l2 2 4-4"/></svg>
-          100 % local · gratuit
+          <span id="privacyLabel">100 % local · gratuit</span>
         </div>
+        <button class="btn soft sm ext-open" id="extensionsBtn" title="Télécharger et gérer les extensions officielles">
+          <svg class="ic" viewBox="0 0 24 24"><path d="M9 3H4v5a3 3 0 110 6v6h6a3 3 0 116 0h5v-6a3 3 0 110-6V3h-6a3 3 0 11-6 0z"/></svg>
+          Extensions
+        </button>
         <button class="icon-btn" id="logBtn" title="Journal">
           <svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M7 9l3 3-3 3M12 15h5"/></svg>
           <span class="badge-dot" id="logDot" hidden></span>
@@ -122,6 +127,11 @@
       <!-- ================= Réglages ================= -->
       <aside class="panel glass">
         <div class="panel-scroll">
+          <div class="section remote-destination" id="remoteDestination" hidden>
+            <div class="section-title"><span class="remote-orb">↗</span> Calculer sur <span class="opt-tag">Extension</span></div>
+            <div class="select-wrap"><select id="remoteTarget" aria-label="PC qui effectue le calcul"><option value="">Ce PC · traitement local</option></select></div>
+            <p class="help" id="remoteTargetNote">La destination, comme les réglages, est figée au lancement. L'aperçu IA utilise aussi le PC choisi.</p>
+          </div>
           <div class="section">
             <div class="section-title"><span class="num">1</span> Modèle d'IA</div>
             <div class="models" id="models"></div>
@@ -443,6 +453,67 @@
     </div>
   </div>
 
+  <!-- Extensions : catalogue officiel et activation volontaire du calcul distant -->
+  <div class="modal" id="extensionsModal" hidden>
+    <div class="modal-card extensions-card" role="dialog" aria-modal="true" aria-labelledby="extensionsTitle">
+      <div class="modal-head">
+        <div><div class="modal-title" id="extensionsTitle">Extensions <span class="ext-official">Officielles</span></div>
+          <div class="muted">Votre app, avec de nouvelles possibilités. Installez seulement ce dont vous avez besoin.</div></div>
+        <button class="icon-btn" id="extensionsClose" title="Fermer">×</button>
+      </div>
+      <div class="ext-layout">
+        <div class="ext-catalog">
+          <div class="ext-eyebrow">À LA CARTE <button class="btn ghost sm" id="extensionsRefresh">Actualiser</button></div>
+          <div id="extensionList"></div>
+          <p class="help" id="extensionCatalogNote">Catalogue officiel uniquement. Chaque téléchargement est vérifié par SHA-256 avant installation.</p>
+        </div>
+        <div class="ext-config" id="remoteSetup" hidden>
+          <div class="remote-heading"><div><span class="ext-eyebrow">CALCUL À DISTANCE</span><h3>Deux PC. Un seul atelier.</h3></div><span class="remote-status" id="rStatus">Non configuré</span></div>
+          <p class="help">Envoyez vos médias au GPU de l'autre PC. Suivez l'avancement ici, récupérez le résultat et laissez l'extension nettoyer les copies après réception vérifiée.</p>
+          <div class="remote-flow"><span>Votre vidéo</span><b>↔ HTTPS</b><span>GPU distant</span><b>→</b><span>Résultat vérifié ✓</span></div>
+          <label class="field-label">Quel est le rôle de ce PC ?</label>
+          <div class="seg" id="remoteRole"><button data-role="controller" class="on">PC principal<small>interface + relais</small></button><button data-role="worker">PC de calcul<small>son GPU travaille</small></button></div>
+          <div id="rControllerForm">
+            <div class="remote-fields">
+              <label>Port TCP du relais<input id="rPort" type="number" min="1024" max="65535" step="1" value="38443"></label>
+              <label>Adresse publique du relais<input id="rUrl" type="text" placeholder="https://adresse-publique:port" spellcheck="false" autocomplete="off"></label>
+            </div>
+            <details class="remote-guide"><summary>Configurer ma Freebox · une seule fois</summary>
+              <ol><li>Dans Freebox OS (<b>mafreebox.freebox.fr</b>), relevez votre IPv4 publique et la plage de ports disponibles. Choisissez un port dans cette plage (ou un port libre si vous avez une IPv4 full-stack).</li>
+                <li>Réservez une IP locale fixe à ce PC dans le DHCP de la Freebox. <span id="rLanIp"></span></li>
+                <li>Dans <b>Paramètres de la Freebox → Mode avancé → Gestion des ports</b>, redirigez ce seul port <b>TCP</b> vers l'IP de ce PC, avec le même port de destination.</li>
+                <li>Autorisez l'application sur votre réseau privé dans le pare-feu Windows. Ne désactivez pas le pare-feu et n'utilisez pas la DMZ.</li>
+                <li>Saisissez <b>https://votre-IPv4-publique:port</b> ci-dessus. Aucun domaine ni certificat payant n'est nécessaire : le code d'appairage contient l'empreinte du certificat privé.</li></ol>
+              <p>Le PC principal doit rester allumé pendant la liaison. Le PC de calcul n'a besoin que de connexions sortantes. Le test final se fait depuis l'autre réseau, pas depuis le Wi-Fi de cette Freebox.</p>
+            </details>
+          </div>
+          <div id="rWorkerForm" hidden>
+            <label class="field-label" for="rJoinCode">Code créé sur le PC principal</label>
+            <textarea id="rJoinCode" rows="3" spellcheck="false" autocomplete="off" placeholder="Collez le code UPV1-… (confidentiel, valable 10 minutes)"></textarea>
+            <p class="help">Code nécessaire au premier appairage uniquement. Laissez-le vide pour modifier le nom, le GPU ou l'adresse du relais d'un PC déjà appairé.</p>
+            <label class="field-label" for="rWorkerUrl">Adresse du relais (PC déjà appairé)<input type="text" id="rWorkerUrl" placeholder="https://adresse-publique:port" spellcheck="false" autocomplete="off"></label>
+            <div class="remote-fields"><label>Nom de ce PC<input type="text" id="rName" maxlength="80" placeholder="Mon PC de calcul"></label>
+              <label>Carte graphique pour les nouveaux travaux<select id="rGpu"><option value="auto">Automatique</option></select></label></div>
+            <p class="help">Les fichiers sont traités avec les mêmes modèles, finitions, fluidité et encodage. Le GPU est celui de ce PC, pas celui du PC principal. Après cette configuration, vous pouvez fermer la fenêtre : le service continue sans fenêtre ni console.</p>
+          </div>
+          <label class="remote-consent"><input type="checkbox" id="rConsent"><span>J'autorise ce PC à participer au calcul distant. Je suis son propriétaire ou j'ai son autorisation.</span></label>
+          <label class="switch-row"><span><b>Démarrer sans fenêtre avec Windows</b><small>À l'ouverture de votre session, pas avant connexion. Facultatif et désactivé par défaut.</small></span><input type="checkbox" id="rSetupStartup"><span class="switch"></span></label>
+          <div class="remote-buttons"><button class="btn primary sm" id="rActivate">Activer le relais</button><button class="btn soft sm" id="rPair" hidden>Créer un code d'appairage</button></div>
+          <div class="pair-box" id="rPairBox" hidden><b>À coller sur le PC de calcul · usage unique · 10 minutes</b><textarea id="rPairCode" readonly rows="3" spellcheck="false" aria-label="Code d'appairage confidentiel"></textarea><button class="btn soft sm" id="rCopyPair">Copier le code</button><p class="help">Ce code donne accès à votre relais. Envoyez-le uniquement au propriétaire du PC voulu. Créer un autre code invalide le précédent.</p></div>
+          <div class="remote-service" id="rService" hidden>
+            <div><span class="ext-eyebrow">SERVICE EN ARRIÈRE-PLAN</span><p id="rServiceMessage"></p></div>
+            <div class="remote-buttons"><button class="btn soft sm" id="rStart">Démarrer</button><button class="btn danger sm" id="rStop">Désactiver</button><button class="btn ghost sm" id="rLogs">Journaux</button></div>
+            <label class="switch-row"><span><b>Démarrage automatique de ce service</b><small>Vous gardez le contrôle, même après avoir fermé l'application.</small></span><input type="checkbox" id="rStartup"><span class="switch"></span></label>
+            <div id="rActive" hidden></div>
+          </div>
+          <div id="rWorkers"></div>
+          <p class="remote-footnote">Appairage à usage unique · certificat TLS épinglé · clés protégées par Windows · aucun contrôle du bureau ou lancement de commandes à distance. Les vidéos ne passent jamais par GitHub.</p>
+        </div>
+        <div class="ext-empty-config" id="extensionWelcome"><span class="remote-orb large">↗</span><h3>Votre deuxième GPU vous attend.</h3><p>Installez « Calcul à distance » sur les deux PC pour transformer l'un d'eux en atelier de calcul, même à travers deux réseaux différents.</p><p class="help">Optionnel : sans extension, votre application reste entièrement locale.</p></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Nouveautés d'une mise à jour -->
   <div class="modal" id="notesModal" hidden>
     <div class="modal-card small">
@@ -469,6 +540,7 @@
   <canvas id="confetti"></canvas>
 
   <script src="mock.js"></script>
+  <script src="extensions.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

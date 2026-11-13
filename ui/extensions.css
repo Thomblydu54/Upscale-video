@@ -1,0 +1,71 @@
+/* Extensions officielles — même atelier, nouvelles capacités, aucune option locale déplacée. */
+.ext-open { white-space: nowrap; }
+.remote-destination { background: linear-gradient(125deg, rgba(139,92,246,.12), rgba(34,211,238,.05)); }
+.remote-orb { display: inline-grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 9px; background: var(--grad-soft); color: var(--cyan); font-size: 19px; }
+.remote-orb.large { width: 84px; height: 84px; font-size: 44px; border-radius: 25px; box-shadow: 0 0 60px rgba(139,92,246,.2); }
+.extensions-card { width: min(1150px, 100%); height: min(900px, 100%); }
+.extensions-card .modal-head .muted { margin-top: 5px; font-size: 12px; }
+.ext-official { color: var(--cyan); background: rgba(34,211,238,.1); border: 1px solid rgba(34,211,238,.2); border-radius: 7px; padding: 3px 7px; font-size: 10px; letter-spacing: .05em; text-transform: uppercase; }
+.ext-layout { display: grid; grid-template-columns: 290px minmax(0, 1fr); min-height: 0; flex: 1; }
+.ext-catalog { padding: 22px 18px; border-right: 1px solid var(--border); background: rgba(0,0,0,.14); overflow-y: auto; }
+.ext-eyebrow { display: flex; align-items: center; justify-content: space-between; color: var(--muted); font-weight: 700; font-size: 10px; letter-spacing: .12em; }
+.ext-eyebrow button { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.ext-card { margin: 12px 0 16px; border: 1px solid rgba(139,92,246,.35); background: radial-gradient(250px 160px at 100% 0, rgba(139,92,246,.2), transparent), var(--surface); border-radius: 17px; padding: 19px; }
+.ext-card h3 { margin: 14px 0 7px; font-size: 17px; }
+.ext-card p { font-size: 12px; color: var(--muted); line-height: 1.6; }
+.ext-card .ext-version { color: var(--cyan); font-size: 10px; font-family: var(--mono); }
+.ext-card .ext-actions { display: flex; gap: 8px; margin-top: 18px; flex-wrap: wrap; }
+.ext-card .ext-actions .btn { flex: 1; justify-content: center; }
+.ext-config { padding: 24px 28px; overflow-y: auto; user-select: text; }
+.remote-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.remote-heading h3 { font-size: 25px; line-height: 1.2; letter-spacing: -.7px; margin: 8px 0 10px; }
+.remote-status { white-space: nowrap; color: var(--muted); font-size: 10px; background: var(--surface-2); border: 1px solid var(--border); padding: 5px 9px; border-radius: 99px; }
+.remote-status.online { color: var(--green); background: rgba(52,211,153,.08); border-color: rgba(52,211,153,.2); }
+.remote-flow { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; padding: 15px 0 18px; margin-bottom: 10px; border-bottom: 1px solid var(--border); font-size: 11px; }
+.remote-flow span { background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+.remote-flow b { font-size: 10px; color: var(--cyan); }
+#remoteRole button { height: 46px; }
+#remoteRole small { display: block; font-size: 10px; color: var(--muted); margin-top: 2px; }
+.remote-fields { display: grid; grid-template-columns: 1fr 2.1fr; gap: 12px; margin-top: 16px; }
+.remote-fields label { font-size: 11.5px; color: var(--muted); }
+.ext-config input[type=text], .ext-config input[type=number], .ext-config select, .ext-config textarea { width: 100%; min-width: 0; margin-top: 6px; border-radius: 10px; border: 1px solid var(--border-2); outline: none; color: var(--text); background: rgba(0,0,0,.22); font: 12px var(--font); padding: 11px 12px; user-select: text; }
+.ext-config input:focus, .ext-config textarea:focus, .ext-config select:focus { border-color: var(--violet-2); box-shadow: 0 0 0 3px rgba(139,92,246,.12); }
+.ext-config textarea { resize: vertical; font: 11px/1.5 var(--mono); }
+.remote-guide { margin-top: 15px; border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; color: var(--muted); font-size: 11.5px; line-height: 1.65; background: rgba(34,211,238,.025); }
+.remote-guide summary { color: var(--cyan); cursor: pointer; font-weight: 600; }
+.remote-guide ol { padding-left: 19px; }
+.remote-guide li { margin: 8px 0; }
+.remote-guide b { color: var(--text); }
+.remote-guide p { margin-bottom: 0; }
+.remote-consent { display: flex; align-items: flex-start; gap: 10px; background: rgba(251,191,36,.045); border: 1px solid rgba(251,191,36,.16); padding: 12px; border-radius: 11px; margin-top: 18px; font-size: 11.5px; }
+.remote-consent input { accent-color: var(--violet); margin-top: 3px; }
+.remote-buttons { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin-top: 12px; }
+.pair-box { border: 1px solid rgba(34,211,238,.25); background: rgba(34,211,238,.04); padding: 14px; border-radius: 12px; margin: 16px 0; }
+.pair-box b { display: block; font-size: 11px; color: var(--cyan); margin-bottom: 6px; }
+.pair-box button { margin-top: 6px; }
+.remote-service { margin-top: 24px; padding-top: 18px; border-top: 1px solid var(--border); }
+.remote-service p { font-size: 12px; margin-top: 7px; }
+#rActive { border-radius: 10px; background: var(--grad-soft); padding: 12px; font-size: 12px; margin-top: 10px; overflow-wrap: anywhere; }
+.worker-card { display: flex; align-items: center; justify-content: space-between; border: 1px solid var(--border); border-radius: 12px; padding: 12px; margin-top: 10px; gap: 10px; }
+.worker-card small { display: block; font-size: 10px; margin-top: 4px; color: var(--muted); }
+.worker-card b { font-size: 12px; }
+.worker-card .dot { margin-right: 7px; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--muted-2); }
+.worker-card .dot.online { background: var(--green); box-shadow: 0 0 8px rgba(52,211,153,.4); }
+.worker-card .worker-actions { display: flex; gap: 4px; flex: none; }
+.worker-card .icon-btn { width: 26px; height: 26px; font-size: 16px; }
+.remote-footnote { color: var(--muted-2); font-size: 10px; line-height: 1.7; margin: 20px 0 0; }
+.ext-empty-config { display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 60px; background: radial-gradient(400px 400px at 50% 40%, rgba(139,92,246,.07), transparent); }
+.ext-empty-config h3 { margin: 27px 0 4px; font-size: 26px; letter-spacing: -.7px; }
+.ext-empty-config p { max-width: 360px; color: var(--muted); line-height: 1.7; font-size: 13px; }
+@media (max-width: 1000px) {
+  .ext-layout { grid-template-columns: 240px minmax(0, 1fr); }
+  .ext-config { padding: 20px; }
+  .remote-flow { justify-content: flex-start; }
+  .remote-heading { align-items: flex-start; flex-direction: column; }
+}
+@media (max-width: 700px) {
+  .ext-layout { display: block; overflow-y: auto; }
+  .ext-catalog { border-right: none; }
+  .ext-config { overflow: visible; }
+  .remote-fields { grid-template-columns: 1fr; }
+}

@@ -1,6 +1,6 @@
 # Upscale Video AI
 
-**Une alternative gratuite à Topaz Video AI.** Upscale Video AI agrandit vos vidéos (480p, 720p, DVD…) jusqu'en 1080p, 4K ou 8K grâce à l'IA. Tout se passe sur votre PC, sans compte ni abonnement.
+**Une alternative gratuite à Topaz Video AI.** Upscale Video AI agrandit vos vidéos (480p, 720p, DVD…) jusqu'en 1080p, 4K ou 8K grâce à l'IA. Par défaut, tout se passe sur votre PC, sans compte ni abonnement. Une extension optionnelle permet aussi de calculer sur un autre PC à vous.
 
 ![icône](assets/icon.png)
 
@@ -83,6 +83,100 @@ Au démarrage, l'application vérifie si une nouvelle version est disponible sur
 
 > Si l'exe se trouve dans un dossier protégé (comme `C:\Program Files`), l'installation automatique est impossible. Placez-le plutôt sur le Bureau ou dans `Documents`.
 
+## Extensions officielles · Calcul à distance (v1.9)
+
+Le bouton **Extensions** permet de télécharger, configurer et désinstaller les extensions
+publiées dans le catalogue officiel. La première, **Calcul à distance**, est un vrai paquet
+optionnel : son code n'est pas embarqué dans l'exe de base. Installer le paquet **n'active
+ni serveur, ni connexion à l'autre PC, ni démarrage automatique**. Les options de traitement
+local (modèles, interpolation, FPS personnalisés, finitions, encodage…) restent inchangées.
+
+### Une seule application, deux rôles
+
+```text
+PC principal (application + relais HTTPS privé)  ← Internet →  PC de calcul (GPU)
+       réglages + progression + résultat                     service sans fenêtre
+```
+
+- Le **PC principal** héberge le relais ; pas de VPS à louer, pas de Tailscale. Il n'a pas
+  besoin d'un GPU puissant pour relayer. Les vidéos ne sont jamais envoyées sur GitHub.
+- Le **PC de calcul** reçoit uniquement les médias lancés par le PC principal, utilise
+  sa propre carte graphique et renvoie le résultat. Aucun contrôle du bureau ou du système.
+- Le service utilise le **même exe**, en mode sans interface ni console. Après la
+  configuration initiale sur le PC de calcul, vous pouvez fermer sa fenêtre ; il continue.
+- Le démarrage automatique est **facultatif**, à cocher sur chaque PC concerné. Il se fait
+  **à l'ouverture de votre session Windows, pas avant connexion** ; ce n'est pas un service
+  système privilégié. Gardez l'exe à son emplacement (ou rouvrez l'app après l'avoir déplacé).
+  Le service est identifiable dans le Gestionnaire des tâches et désactivable dans l'app.
+
+### 1. Préparer le PC principal et la Freebox
+
+1. Mettez l'application à jour sur les deux PC, ouvrez **Extensions**, puis **Installer**
+   sous **Calcul à distance**. Une connexion Internet au catalogue officiel est nécessaire.
+2. Sur le PC principal, choisissez **PC principal · interface + relais**.
+3. Dans **Freebox OS → État de la Freebox → Internet**, relevez votre IPv4 publique et
+   votre plage de ports. Choisissez **un port libre dans cette plage**. Une IPv4 partagée
+   suffit si le port appartient à votre plage. L'option full-stack est facultative ; elle
+   donne tous les ports ([assistance Free](https://assistance.free.fr/articles/1758)).
+4. Réservez une IPv4 locale fixe au PC principal dans le DHCP de la Freebox. Dans
+   **Paramètres de la Freebox → Mode avancé → Gestion des ports**, ajoutez une redirection
+   **TCP**, pour ce seul port externe vers cette IPv4 locale et le **même port interne**.
+5. Saisissez le port choisi et l'adresse **`https://VOTRE_IPV4_PUBLIQUE:PORT`** dans
+   l'extension. Cochez l'autorisation, puis **Activer le relais**. Autorisez l'application
+   dans le pare-feu Windows pour votre réseau privé si Windows le demande. Aucun réglage
+   de box ou de pare-feu n'est modifié silencieusement. **Ni DMZ, ni pare-feu désactivé.**
+6. Cliquez sur **Créer un code d'appairage**. Le code est confidentiel, valable **10 minutes**
+   et à **usage unique**. En créer un autre invalide le précédent.
+
+### 2. Appairer le PC de calcul
+
+1. Sur l'autre PC, dans la même extension, choisissez **PC de calcul · son GPU travaille**.
+2. Collez le code, donnez un nom au PC et choisissez son GPU (ou Automatique).
+3. Cochez l'autorisation. Le démarrage avec Windows reste au choix, désactivé par défaut.
+4. Cliquez sur **Appairer et activer le calcul**. **Aucun port à ouvrir sur ce PC** : ses
+   connexions sont sortantes. Vous pouvez ensuite fermer sa fenêtre.
+5. Sur le PC principal, le PC appairé apparaît. Cliquez **Utiliser**, ou choisissez-le dans
+   **Calculer sur**, au-dessus des modèles. **Ce PC · traitement local** reste disponible.
+
+Le premier test doit être fait **depuis l'autre réseau** : tester votre adresse publique
+depuis le Wi-Fi de la même Freebox ne prouve pas que la redirection fonctionne. Les tests
+automatiques du projet utilisent deux pairs HTTPS locaux ; ils ne peuvent pas vérifier
+votre box, votre pare-feu, vos pilotes GPU ni votre débit à distance.
+
+### Utilisation, reprise et nettoyage
+
+- Choisissez normalement la résolution, le modèle, la fluidité, les finitions et l'encodeur.
+  **L'aperçu IA et les traitements** utilisent le PC choisi. Un aperçu vidéo transfère la
+  source entière au PC de calcul, puis n'améliore que l'image choisie.
+- **Destination + réglages + GPU distant sont figés au clic.** Changer ensuite de PC ou de
+  réglages ne déplace ni ne modifie les travaux en file ou en pause. Les dossiers de sortie
+  et temporaires sont propres à chaque machine ; aucun chemin du PC principal n'est exécuté
+  comme chemin de sortie sur l'autre PC.
+- La carte montre la destination verrouillée ; la barre affiche l'envoi, le calcul distant,
+  le retour et la vérification. Il n'y a **jamais de repli silencieux sur le GPU local**.
+- **Pause**, fermeture du PC principal et reprise de la file gardent leur comportement.
+  Les commandes de pause/abandon sont durables. Si le PC GPU est déconnecté, il ne peut les
+  appliquer qu'à sa reconnexion. Un calcul déjà lancé peut finir pendant une coupure du
+  relais, puis conserver son résultat en attendant le retour du PC principal.
+- Les sources et résultats se transfèrent par blocs avec reprise. Les checkpoints du
+  moteur sont conservés sur le PC GPU. Après un arrêt, aucun calcul déjà confirmé n'est
+  répété ; les lots non confirmés peuvent être refaits comme dans le traitement local.
+- À réception : contrôle **taille + SHA-256**, enregistrement du fichier final, **puis reçu
+  de livraison**. Le cache du relais et le dossier complet du travail sur le PC GPU
+  (source reçue, segments, résultat) sont alors supprimés. **L'original du PC principal
+  n'est jamais supprimé.** Un GPU éteint ne peut nettoyer ses copies qu'à sa reconnexion.
+- Désinstallation et révocation attendent la livraison ou l'abandon **et le nettoyage
+  confirmé**, pour ne pas couper l'unique moyen de récupérer/effacer un résultat.
+- Si l'IP publique ou le port change : corrigez le relais sur le PC principal, puis
+  l'adresse du relais sur le PC GPU, sans nouveau code. L'empreinte du même relais et les
+  travaux sont conservés. Le code n'est nécessaire qu'au premier appairage.
+- Connexions chiffrées avec certificat privé **épinglé** : aucun domaine ni certificat
+  payant requis. Le client vérifie l'empreinte avant d'envoyer ses clés. Les jetons sont
+  chiffrés via **DPAPI** sous Windows. Une adresse ouverte dans un navigateur ne constitue
+  pas l'interface du relais ; n'ajoutez pas son certificat au système pour le faire marcher.
+
+Les détails du protocole et du développement sont dans [extensions/README.md](extensions/README.md).
+
 ### En cas de problème
 - **« Aucune carte graphique compatible Vulkan »** : mettez à jour les pilotes de votre carte graphique.
 - **Erreur de mémoire vidéo** : dans *Avancé*, mettez *Taille de tuile* sur 128 ou 64.
@@ -113,8 +207,11 @@ L'exe est compilé automatiquement par GitHub Actions (`.github/workflows/build-
 pip install -r requirements-build.txt
 python scripts/fetch_tools.py
 pyinstaller --onefile --windowed --name UpscaleVideoAI --icon assets/icon.ico ^
-  --splash assets/splash.png --add-data "bin;bin" --add-data "assets;assets" --add-data "ui;ui" ^
-  --collect-data sv_ttk --collect-all tkinterdnd2 main.py
+  --add-data "bin;bin" --add-data "assets;assets" --add-data "ui;ui" ^
+  --collect-data sv_ttk --collect-all tkinterdnd2 --collect-all cryptography ^
+  --hidden-import http.server --hidden-import http.client --hidden-import socketserver ^
+  --hidden-import secrets --hidden-import ipaddress main.py
+python scripts/build_extensions.py
 ```
 
 L'exe se trouve ensuite dans `dist/`.
@@ -129,4 +226,5 @@ L'exe se trouve ensuite dans `dist/`.
 - RIFE / rife-ncnn-vulkan : © hzwer, nihui, licence MIT
 - Modèles Upscayl : © Upscayl, AGPL-3.0
 - FFmpeg : GPL
+- cryptography : Apache-2.0 / BSD-3-Clause (identité TLS du relais et certificats).
 - pywebview : BSD-3-Clause. Sun Valley ttk theme : MIT. tkinterdnd2 : MIT.

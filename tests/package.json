@@ -1,0 +1,6 @@
+{
+  "private": true,
+  "description": "Tests de non-régression de l'interface, sans navigateur ni GPU",
+  "scripts": {"test": "node test_ui.cjs"},
+  "devDependencies": {"jsdom": "24.1.3"}
+}
