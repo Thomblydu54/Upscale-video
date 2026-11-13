@@ -1,7 +1,7 @@
 # Extensions officielles — API 1
 
 Les extensions se téléchargent depuis **Extensions** dans l'application. La première est
-**Calcul à distance**, version 1.0.0, compatible avec Upscale Video AI ≥ 1.9.0.
+**Calcul à distance**, version 1.0.1, compatible avec Upscale Video AI ≥ 1.9.0.
 
 ## Développer et publier
 
@@ -43,7 +43,7 @@ ni UPnP, ni DMZ, ni désactivation du pare-feu, ni tunnel tiers ne sont utilisé
 
 - Certificat ECDSA propre au relais ; SHA-256 transmise dans le code hors bande. Le client
   vérifie cette empreinte **avant** l'envoi du bearer. Aucun redirect/proxy implicite.
-- Code aléatoire de 256 bits, 10 minutes, usage unique ; un nouveau code révoque le précédent.
+- Code aléatoire de 256 bits, 3 heures, usage unique ; un nouveau code révoque le précédent.
 - Jetons de rôle distincts : contrôleur **loopback uniquement**, GPU limité à ses travaux.
   Jetons stockés chiffrés via DPAPI sous Windows ; seuls leurs hash sont conservés au relais.
 - Requêtes JSON ≤ 64 Kio, blocs de transfert ≤ 2 Mio, 16 connexions simultanées et délai

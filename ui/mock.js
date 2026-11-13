@@ -152,7 +152,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.9.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.9.1' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -163,7 +163,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.9.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.9.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],

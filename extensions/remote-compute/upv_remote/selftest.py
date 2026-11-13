@@ -6,6 +6,7 @@ import os
 import shutil
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from upscaler import tools
@@ -34,7 +35,9 @@ def run():
                 assert e.status == 495
             else:
                 raise AssertionError("Un certificat non appairé a été accepté.")
+            before = time.time()
             pair = controller.post("/v1/controller/pair")
+            assert before + 3 * 60 * 60 <= pair["expires"] <= time.time() + 3 * 60 * 60, "Code non valable trois heures."
             identity = Client(url, pin).post("/v1/pair", {"secret": pair["secret"], "name": "GPU selftest"})
             try:
                 Client(url, pin).post("/v1/pair", {"secret": pair["secret"], "name": "intrus"})
@@ -83,7 +86,7 @@ def run():
             assert not (folder / "worker" / job["id"]).exists()
             assert not (folder / "hub" / job["id"]).exists()
             assert source.exists()
-            return "TLS épinglé, code unique, transfert >2 Mo, réglages figés, reçu SHA-256 puis nettoyage : OK"
+            return "TLS épinglé, code unique valable 3 h, transfert >2 Mo, réglages figés, reçu SHA-256 puis nettoyage : OK"
         finally:
             server.shutdown()
             server.server_close()

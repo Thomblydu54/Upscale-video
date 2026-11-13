@@ -1,7 +1,7 @@
 {
   "id": "remote-compute",
   "name": "Calcul à distance",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "min_app": "1.9.0",
   "api": 1,
   "entrypoint": "upv_remote"

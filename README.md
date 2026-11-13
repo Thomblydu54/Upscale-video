@@ -125,8 +125,13 @@ PC principal (application + relais HTTPS privé)  ← Internet →  PC de calcul
    l'extension. Cochez l'autorisation, puis **Activer le relais**. Autorisez l'application
    dans le pare-feu Windows pour votre réseau privé si Windows le demande. Aucun réglage
    de box ou de pare-feu n'est modifié silencieusement. **Ni DMZ, ni pare-feu désactivé.**
-6. Cliquez sur **Créer un code d'appairage**. Le code est confidentiel, valable **10 minutes**
+6. Cliquez sur **Créer un code d'appairage**. Le code est confidentiel, valable **3 heures**
    et à **usage unique**. En créer un autre invalide le précédent.
+
+La durée de 3 heures nécessite l'extension **Calcul à distance 1.0.1** sur le PC principal
+(**Extensions → Actualiser → Mettre à jour**, puis **Démarrer** si le relais est arrêté).
+Les codes créés avant la mise à jour conservent leur ancienne échéance : créez-en un nouveau.
+Les PC déjà appairés n'ont pas besoin d'être appairés à nouveau.
 
 ### 2. Appairer le PC de calcul
 

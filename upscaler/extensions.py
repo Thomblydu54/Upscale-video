@@ -30,7 +30,7 @@ MAX_PACKAGE = 4 << 20
 MAX_UNPACKED = 12 << 20
 OFFICIAL = {"remote-compute": {"id": "remote-compute", "name": "Calcul à distance",
     "description": "Confiez vos vidéos au GPU d'un autre PC, suivez le calcul et récupérez le résultat automatiquement.",
-    "version": "1.0.0", "min_app": "1.9.0", "entrypoint": "upv_remote",
+    "version": "1.0.1", "min_app": "1.9.0", "entrypoint": "upv_remote",
     "permissions": ["Réseau et transfert de vos médias", "Calcul GPU en arrière-plan",
                     "Démarrage à l'ouverture de session Windows (facultatif)"]}}
 

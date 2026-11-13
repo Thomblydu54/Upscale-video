@@ -45,6 +45,12 @@ async function until(fn) { for (let i = 0; i < 100; i++) { if (fn()) return; awa
   $('#remoteTarget').value = 'demo-worker'; $('#remoteTarget').dispatchEvent(new w.Event('change'));
   await until(() => $('#privacyLabel').textContent === 'Vos PC · gratuit');
   assert.match($('#remoteTargetNote').textContent, /GPU distant/);
+  assert.match($('#rJoinCode').placeholder, /valable 3 heures/);
+  assert.match($('#rPairBox').textContent, /usage unique · 3 heures/);
+  const beforePair = Date.now() / 1000;
+  const pair = await w.MockApi.remote_action('pair', {});
+  assert.ok(pair.result.expires >= beforePair + 3 * 60 * 60);
+  assert.ok(pair.result.expires <= Date.now() / 1000 + 3 * 60 * 60);
   $('#rPair').click(); await until(() => !$('#rPairBox').hidden);
   assert.ok($('#rPairCode').value);
   $('#extensionsClose').click();

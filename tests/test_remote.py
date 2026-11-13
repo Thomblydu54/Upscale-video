@@ -157,6 +157,36 @@ class RemoteTests(unittest.TestCase):
             with self.assertRaises(ProtocolError):
                 parse_pairing(value)
 
+    def test_pairing_three_hour_lifetime_restart_boundary_and_replacement(self):
+        now = time.time()
+        with mock.patch("upv_remote_tests.hub.time.time", return_value=now) as clock:
+            pair = self.controller.post("/v1/controller/pair")
+            self.assertEqual(pair["expires"], now + 3 * 60 * 60)
+            self.assertEqual(list(json_read(self.hub.path)["pairs"].values()), [pair["expires"]])
+            # Le redémarrage ne raccourcit ni ne prolonge l'échéance enregistrée.
+            self.hub = Hub(self.hub.folder, self.master, self.pin)
+            self.server.hub = self.hub
+            clock.return_value = pair["expires"] - 1
+            identity = Client(self.url, self.pin).post("/v1/pair", {
+                "secret": pair["secret"], "name": "Appairé après presque trois heures"})
+            with self.assertRaises(ProtocolError):
+                Client(self.url, self.pin).post("/v1/pair", {"secret": pair["secret"]})
+            # L'expiration est effective dès l'échéance, pas une seconde plus tard.
+            expired = self.controller.post("/v1/controller/pair")
+            clock.return_value = expired["expires"]
+            with self.assertRaises(ProtocolError) as caught:
+                Client(self.url, self.pin).post("/v1/pair", {"secret": expired["secret"]})
+            self.assertEqual(caught.exception.status, 403)
+            # Créer un code remplace toujours le précédent, même s'il n'a pas expiré.
+            previous = self.controller.post("/v1/controller/pair")
+            current = self.controller.post("/v1/controller/pair")
+            with self.assertRaises(ProtocolError):
+                Client(self.url, self.pin).post("/v1/pair", {"secret": previous["secret"]})
+            Client(self.url, self.pin).post("/v1/pair", {"secret": current["secret"], "name": "Nouveau PC"})
+            # Les PC déjà appairés ne sont pas déconnectés après trois heures.
+            Client(self.url, self.pin, identity["token"]).post("/v1/worker/ping")
+            self.worker_client.post("/v1/worker/ping")
+
     def test_auth_roles_and_job_isolation(self):
         job = self.create()
         for client, path in ((Client(self.url, self.pin), "/v1/controller/state"),

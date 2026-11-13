@@ -198,7 +198,7 @@ if (window.MockApi) {
     const mock = window.MockApi;
     let installed = false;
     let remote = { installed: false, role: '', running: false, startup: false, workers: [], selected: '' };
-    const catalog = () => ({ checked: true, busy: '', error: '', items: [{ id: 'remote-compute', name: 'Calcul à distance', version: '1.0.0', installed: installed ? '1.0.0' : '', available: true,
+    const catalog = () => ({ checked: true, busy: '', error: '', items: [{ id: 'remote-compute', name: 'Calcul à distance', version: '1.0.1', installed: installed ? '1.0.1' : '', available: true,
       description: 'Confiez vos vidéos au GPU d’un autre PC, suivez le calcul et récupérez le résultat automatiquement.', permissions: ['Réseau et médias choisis', 'Calcul GPU en arrière-plan', 'Démarrage Windows facultatif'] }] });
     const init = mock.init.bind(mock), poll = mock.poll.bind(mock);
     mock.init = async () => ({ ...await init(), extensions: catalog(), remote });
@@ -214,7 +214,7 @@ if (window.MockApi) {
       if (action === 'start') remote = { ...remote, running: true };
       if (action === 'stop') remote = { ...remote, running: false, startup: false };
       if (action === 'revoke') remote = { ...remote, workers: remote.workers.filter((w) => w.id !== values.id), selected: '' };
-      return { ok: true, remote, result: action === 'pair' ? { code: 'DÉMONSTRATION UNIQUEMENT — aucun code d’appairage réel.', expires: Date.now() / 1000 + 600 } : remote };
+      return { ok: true, remote, result: action === 'pair' ? { code: 'DÉMONSTRATION UNIQUEMENT — aucun code d’appairage réel.', expires: Date.now() / 1000 + 3 * 60 * 60 } : remote };
     };
   })();
 }

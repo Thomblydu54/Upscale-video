@@ -24,6 +24,8 @@ from upscaler.extension_runtime import atomic_json, read_json, sha256_file
 from .common import (CHUNK, JSON_LIMIT, MAX_FILE, TERMINAL, ProtocolError, digest, filename,
                      identifier, loopback, safe_settings, token, token_hash)
 
+PAIRING_TTL_SECONDS = 3 * 60 * 60
+
 
 class Hub:
     def __init__(self, folder, controller_token: str, pin: str):
@@ -58,9 +60,10 @@ class Hub:
     def create_pair(self):
         with self.lock:
             secret = token()
-            self.state["pairs"] = {token_hash(secret): time.time() + 600}  # un seul code actif, 10 min
+            expires = time.time() + PAIRING_TTL_SECONDS
+            self.state["pairs"] = {token_hash(secret): expires}  # un seul code actif, 3 heures
             self.save()
-            return {"secret": secret, "expires": time.time() + 600, "pin": self.pin}
+            return {"secret": secret, "expires": expires, "pin": self.pin}
 
     def pair(self, data: dict, ip: str):
         with self.lock:
@@ -72,7 +75,7 @@ class Hub:
                 raise ProtocolError("Trop de tentatives d'appairage. Réessayez dans une minute.", 429)
             key = token_hash(data.get("secret", ""))
             expiry = self.state["pairs"].get(key, 0)
-            if expiry < now:
+            if expiry <= now:
                 self.failures[ip] = (count + 1, now)
                 raise ProtocolError("Code d'appairage expiré ou déjà utilisé.", 403)
             del self.state["pairs"][key]

@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.9.1
+- **Codes d'appairage valables 3 heures** au lieu de 10 minutes, dans l'extension **Calcul à distance 1.0.1**. L'échéance est conservée après redémarrage du relais.
+- L'usage unique et l'invalidation du code précédent à chaque création restent inchangés. Les PC déjà appairés restent connectés ; cette durée concerne uniquement le premier appairage.
+- Textes de l'interface et documentation mis à jour, avec tests de validité jusqu'à trois heures, d'expiration à l'échéance, de remplacement et d'usage unique. Aucun changement du traitement ou des réglages existants.
+
 ## v1.9.0
 - **Extensions officielles** : nouveau bouton Extensions, catalogue téléchargeable depuis les releases, installation/mise à jour/désinstallation, vérification SHA-256 du catalogue et des paquets. Le code optionnel se télécharge séparément ; installer n'active rien.
 - Première extension : **Calcul à distance 1.0.0**. Un PC principal héberge un relais privé ; l'autre reçoit les vidéos/images et utilise son propre GPU. Les deux PC peuvent être sur deux réseaux différents, avec une redirection TCP explicite de la Freebox vers le PC principal. Pas de VPS, pas de Tailscale, pas de médias sur GitHub.

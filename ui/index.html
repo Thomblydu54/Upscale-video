@@ -489,7 +489,7 @@
           </div>
           <div id="rWorkerForm" hidden>
             <label class="field-label" for="rJoinCode">Code créé sur le PC principal</label>
-            <textarea id="rJoinCode" rows="3" spellcheck="false" autocomplete="off" placeholder="Collez le code UPV1-… (confidentiel, valable 10 minutes)"></textarea>
+            <textarea id="rJoinCode" rows="3" spellcheck="false" autocomplete="off" placeholder="Collez le code UPV1-… (confidentiel, valable 3 heures)"></textarea>
             <p class="help">Code nécessaire au premier appairage uniquement. Laissez-le vide pour modifier le nom, le GPU ou l'adresse du relais d'un PC déjà appairé.</p>
             <label class="field-label" for="rWorkerUrl">Adresse du relais (PC déjà appairé)<input type="text" id="rWorkerUrl" placeholder="https://adresse-publique:port" spellcheck="false" autocomplete="off"></label>
             <div class="remote-fields"><label>Nom de ce PC<input type="text" id="rName" maxlength="80" placeholder="Mon PC de calcul"></label>
@@ -499,7 +499,7 @@
           <label class="remote-consent"><input type="checkbox" id="rConsent"><span>J'autorise ce PC à participer au calcul distant. Je suis son propriétaire ou j'ai son autorisation.</span></label>
           <label class="switch-row"><span><b>Démarrer sans fenêtre avec Windows</b><small>À l'ouverture de votre session, pas avant connexion. Facultatif et désactivé par défaut.</small></span><input type="checkbox" id="rSetupStartup"><span class="switch"></span></label>
           <div class="remote-buttons"><button class="btn primary sm" id="rActivate">Activer le relais</button><button class="btn soft sm" id="rPair" hidden>Créer un code d'appairage</button></div>
-          <div class="pair-box" id="rPairBox" hidden><b>À coller sur le PC de calcul · usage unique · 10 minutes</b><textarea id="rPairCode" readonly rows="3" spellcheck="false" aria-label="Code d'appairage confidentiel"></textarea><button class="btn soft sm" id="rCopyPair">Copier le code</button><p class="help">Ce code donne accès à votre relais. Envoyez-le uniquement au propriétaire du PC voulu. Créer un autre code invalide le précédent.</p></div>
+          <div class="pair-box" id="rPairBox" hidden><b>À coller sur le PC de calcul · usage unique · 3 heures</b><textarea id="rPairCode" readonly rows="3" spellcheck="false" aria-label="Code d'appairage confidentiel"></textarea><button class="btn soft sm" id="rCopyPair">Copier le code</button><p class="help">Ce code donne accès à votre relais. Envoyez-le uniquement au propriétaire du PC voulu. Créer un autre code invalide le précédent.</p></div>
           <div class="remote-service" id="rService" hidden>
             <div><span class="ext-eyebrow">SERVICE EN ARRIÈRE-PLAN</span><p id="rServiceMessage"></p></div>
             <div class="remote-buttons"><button class="btn soft sm" id="rStart">Démarrer</button><button class="btn danger sm" id="rStop">Désactiver</button><button class="btn ghost sm" id="rLogs">Journaux</button></div>
