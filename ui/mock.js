@@ -49,7 +49,7 @@
     { name: 'Vacances_plage_camescope.avi', w: 720, h: 576, dur: '00:12:05', size: 890e6, img: 'family', clean: 'moyen' },
     { name: 'Photo_mariage_1998.jpg', w: 800, h: 450, dur: 'Image', size: 2.4e6, img: 'family', kind: 'image', clean: 'léger' },
   ];
-  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true, interpolation: 'off', image_format: 'auto', finish: 'off', finish_sharp: 0, finish_color: 0, finish_contrast: 0, finish_glow: 0, finish_warmth: 0, clean: 'auto' };
+  let settings = { model: 'upscayl-lite-4x', output_size: '2160p', encoder: 'x264', quality: 18, speed: 'medium', deinterlace: 'auto', gpu: 'auto', tile: 0, tta: false, container: 'mp4', output_dir: '', temp_dir: '', auto_update: true, interpolation: 'off', image_format: 'auto', finish: 'off', finish_sharp: 0, finish_color: 0, finish_contrast: 0, finish_glow: 0, finish_warmth: 0, clean: 'auto', interp_fps: 60 };
   let files = [];
   let nextId = 1;
   let events = [];
@@ -60,13 +60,15 @@
 
   function outFor(f) {
     const k = settings.output_size;
-    const m = { x2: 2, x3: 3, x4: 4 }[settings.interpolation] || 1;
     const isImg = f.kind === 'image';
+    // personnalisé : sortie à la fréquence voulue, sauf vidéo déjà aussi rapide (fréquence d'origine)
+    const m = settings.interpolation === 'custom' ? (Number(settings.interp_fps) > f.fps ? Number(settings.interp_fps) / f.fps : 1)
+      : { x2: 2, x3: 3, x4: 4 }[settings.interpolation] || 1;
     let fac = k.startsWith('x') ? Number(k.slice(1)) : Number(k.replace('p', '')) / Math.min(f.w, f.h);
     if (fac <= 1 && (isImg || m === 1)) return k === 'x1' ? 'inchangé' : 'déjà ≥';
     if (fac < 1) fac = 1;
     const ev = (x) => Math.max(2, Math.round(x / 2) * 2);
-    return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${Math.round(f.fps * m * 100) / 100} i/s` : '');
+    return `${ev(f.w * fac)}×${ev(f.h * fac)}` + (!isImg && m > 1 ? ` · ${String(Math.round(f.fps * m * 100) / 100).replace('.', ',')} i/s` : '');
   }
   function pub(f) {
     const clean = f.cleanLevel && settings.clean !== 'off' ? `Compression détectée · nettoyage ${f.cleanLevel}` : '';
@@ -138,7 +140,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.7.0', tag: 'v1.7.0', current: '1.6.1', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.8.0', tag: 'v1.8.0', current: '1.7.0', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -147,7 +149,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.7.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.8.0' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -158,7 +160,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.6.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.7.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
@@ -180,6 +182,7 @@
     async clear_files() { if (!running) files = []; return true; },
     async set_settings(v) {
       Object.assign(settings, v);
+      settings.interp_fps = Math.round(Math.max(1, Math.min(240, Number(settings.interp_fps) || 60)) * 1000) / 1000;
       const p = FINISHES.find((x) => x[0] === settings.finish);
       if (p) Object.assign(settings, p[2]);  // comme le moteur : un préréglage impose ses valeurs
       return { ...settings };
@@ -228,7 +231,7 @@
       const short = { 'upscayl-lite-4x': 'Réaliste Rapide', 'upscayl-standard-4x': 'Réaliste Pro', 'realesrgan-x4plus': 'Real-ESRGAN', 'realesr-animevideov3': 'Anime Rapide', 'realesrgan-x4plus-anime': 'Anime Pro' };
       const summary = (f) => [short[settings.model] || settings.model, (SIZES.find((x) => x[0] === settings.output_size) || [0, settings.output_size])[1],
         ...(f.kind === 'image' ? [`format ${settings.image_format === 'auto' ? 'identique' : settings.image_format.toUpperCase()}`]
-          : [...(settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`]),
+          : [...(settings.interpolation === 'custom' ? [`fluidité ${String(settings.interp_fps).replace('.', ',')} i/s`] : settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`]),
         ...(finActive() ? [`finitions ${finLabel()}`] : [])].join(' · ');
       const fresh = files.filter((f) => ['ready', 'error', 'cancelled'].includes(f.state) && !f.frozen);
       fresh.forEach((f) => Object.assign(f, { state: 'queued', status: 'En file', progress: 0, frozen: summary(f), frozenOut: outFor(f) }));

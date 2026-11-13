@@ -347,6 +347,9 @@ class App:
             pass
         s = Settings.from_dict(data)
         self._loaded_settings = s
+        if s.interpolation == "custom":  # réglée dans l'interface moderne : conservée ici
+            self.cb_interp.set_items(list(INTERPOLATIONS)
+                                     + [("custom", f"Personnalisée – {s.interp_fps:g} i/s")])
         self.cb_interp.set(s.interpolation)
         self.cb_imgfmt.set(s.image_format)
         self.cb_model.set(s.model)

@@ -241,8 +241,24 @@ function updateSizeHint() {
     const f = (x) => (round ? String(Math.round(x * m)) : fmtFps(x * m));
     return lo === hi ? f(lo) : `${f(lo)} à ${f(hi)}`;
   };
+  const custom = S.settings.interpolation === 'custom';
+  const target = Number(S.settings.interp_fps) || 60;
   $('#fpsHint').textContent = !fpsList.length ? ''
+    : custom ? (hi < target ? `${span(1)} → ${fmtFps(target)} i/s` : lo >= target ? `${span(1)} i/s` : `${span(1)} → ${fmtFps(target)} i/s max`)
     : (k > 1 ? `${span(1)} → ${span(k)} i/s` : `${span(1)} i/s`) + (lo !== hi ? ' (selon la vidéo)' : '');
+  // fluidité personnalisée
+  $('#fpsCustom').hidden = !custom;
+  $('small', $('#interpolation button[data-v="custom"]')).textContent = custom ? `${fmtFps(target)} i/s` : 'personnalisé';
+  const inp = $('#interpFps');
+  if (document.activeElement !== inp) { inp.value = fmtFps(target); inp.classList.remove('bad'); }
+  $$('#fpsChips button').forEach((b) => b.classList.toggle('on', Number(b.dataset.f) === target));
+  const note = $('#fpsNote');
+  const slow = fpsList.filter((x) => x >= target);
+  note.classList.toggle('warn', custom && slow.length > 0);
+  note.textContent = !custom ? ''
+    : slow.length && slow.length === fpsList.length ? `Vos vidéos sont déjà à ${fmtFps(target)} i/s ou plus : leur fréquence d'origine sera conservée.`
+    : slow.length ? `Les vidéos déjà à ${fmtFps(target)} i/s ou plus gardent leur fréquence d'origine.`
+    : 'Chaque vidéo sort exactement à cette fréquence, sans saccade, avec la même durée.';
   const words = { x2: 'double', x3: 'triple', x4: 'quadruple' };
   $$('#interpolation button').forEach((b) => {
     const m = { x2: 2, x3: 3, x4: 4 }[b.dataset.v];
@@ -250,6 +266,19 @@ function updateSizeHint() {
   });
 }
 const fmtFps = (x) => String(Math.round(x * 100) / 100).replace('.', ',');
+
+/* fréquence personnalisée saisie (virgule ou point acceptés) */
+function commitCustomFps() {
+  const inp = $('#interpFps');
+  const v = Number(String(inp.value).trim().replace(',', '.').replace(/\s*(i\/s|fps|ips)$/i, ''));
+  if (!Number.isFinite(v) || v < 1 || v > 240) {
+    inp.classList.add('bad');
+    toast('info', 'Fréquence invalide', 'Entrez un nombre d\'images par seconde entre 1 et 240 (ex. 60 ou 59,94).');
+    return;
+  }
+  inp.classList.remove('bad');
+  setSetting('interp_fps', Math.round(v * 1000) / 1000);
+}
 
 /* ------------------------------------------------------------------ interactions */
 function bindUi() {
@@ -280,6 +309,14 @@ function bindUi() {
   for (const [sel, key] of [['#container', 'container'], ['#speed', 'speed'], ['#deinterlace', 'deinterlace'], ['#interpolation', 'interpolation'], ['#image_format', 'image_format']]) {
     $$(sel + ' button').forEach((b) => b.addEventListener('click', () => setSetting(key, b.dataset.v)));
   }
+  $('#interpolation button[data-v="custom"]').addEventListener('click', () => setTimeout(() => { const i = $('#interpFps'); i.focus(); i.select(); }, 30));
+  $('#interpFps').addEventListener('change', commitCustomFps);
+  $('#interpFps').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+    else if (e.key === 'Escape') { e.target.value = fmtFps(Number(S.settings.interp_fps) || 60); e.target.blur(); }
+  });
+  $('#interpFps').addEventListener('input', (e) => e.target.classList.remove('bad'));
+  $$('#fpsChips button').forEach((b) => b.addEventListener('click', () => setSetting('interp_fps', Number(b.dataset.f))));
   $('#outdirField').addEventListener('click', async (e) => {
     if (e.target.closest('.mini-x')) return;
     const p = await API.pick_folder('output_dir');

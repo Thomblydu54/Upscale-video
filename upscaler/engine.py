@@ -77,6 +77,10 @@ INTERPOLATIONS: list[tuple[str, str]] = [
     ("x3", "x3 (ex. 24 → 72 i/s)"),
     ("x4", "x4 (ex. 30 → 120 i/s, pour écran 120 / 144 Hz)"),
 ]
+# « custom » : fréquence de sortie saisie par l'utilisateur (Settings.interp_fps), en plus
+# des multiplicateurs ci-dessus (qui restent strictement inchangés)
+INTERP_CUSTOM = "custom"
+INTERP_FPS_MIN, INTERP_FPS_MAX = 1.0, 240.0
 # Finitions (optionnelles) : retouche appliquée APRÈS l'IA, à la résolution finale.
 # « off » = aucun filtre ajouté : le traitement est strictement identique à celui sans finitions.
 FINISH_KEYS = ("finish_sharp", "finish_color", "finish_contrast", "finish_glow", "finish_warmth")
@@ -165,6 +169,8 @@ class Settings:
     finish_warmth: int = 0      # -100 (froid / bleu) .. 100 (chaud / doré)
     # nettoyage des défauts de compression avant l'IA (détection automatique par fichier)
     clean: str = "auto"         # auto | off
+    # fluidité personnalisée : fréquence de sortie voulue (utilisée si interpolation == "custom")
+    interp_fps: float = 60.0
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -184,8 +190,11 @@ class Settings:
             s.encoder = cls.encoder
         if s.output_size not in dict(OUTPUT_SIZES):
             s.output_size = cls.output_size
-        if s.interpolation not in dict(INTERPOLATIONS):
+        if s.interpolation not in dict(INTERPOLATIONS) and s.interpolation != INTERP_CUSTOM:
             s.interpolation = cls.interpolation
+        if not math.isfinite(s.interp_fps):
+            s.interp_fps = cls.interp_fps
+        s.interp_fps = round(max(INTERP_FPS_MIN, min(INTERP_FPS_MAX, s.interp_fps)), 3)
         if s.image_format not in dict(IMAGE_FORMATS):
             s.image_format = cls.image_format
         if s.clean not in ("auto", "off"):
@@ -204,6 +213,37 @@ class Settings:
     @property
     def interp_factor(self) -> int:
         return int(self.interpolation[1:]) if self.interpolation.startswith("x") else 1
+
+
+def custom_fps_fraction(value: float) -> Fraction:
+    """Fréquence saisie -> fraction exacte (59,94 -> 60000/1001, 23,976 -> 24000/1001…)."""
+    v = float(value)
+    if abs(v - round(v)) > 1e-3:
+        ntsc = v * 1.001
+        if abs(ntsc - round(ntsc)) < 0.006:
+            return Fraction(int(round(ntsc)) * 1000, 1001)
+    return Fraction(v).limit_denominator(100)
+
+
+def custom_interp(fps: str, target: float):
+    """Fluidité personnalisée : (ratio sortie/source, finesse de la grille RIFE M) ou None si
+    la cible n'est pas plus rapide que la vidéo (fréquence d'origine conservée).
+
+    RIFE calcule M images par intervalle source ; on garde pour chaque image de sortie le point
+    de la grille le plus proche de son instant exact. M est le plus petit entier >= ratio dont
+    l'écart reste <= 1/12 d'intervalle source et <= 1/4 d'intervalle de sortie (imperceptible ;
+    souvent exact : 24 -> 60 => M = 5, 30 -> 60 => M = 2, soit exactement le x2)."""
+    r = custom_fps_fraction(target) / Fraction(fps)
+    if r <= 1:
+        return None
+    p, q = r.numerator, r.denominator
+    m = math.ceil(r)
+    while True:
+        worst = max(abs(Fraction(2 * j * m * q + p, 2 * p) // 1 - Fraction(j * m * q, p))
+                    for j in range(min(p, 4000)))
+        if worst * max(12, 4 * r) <= m or m >= 64:
+            return r, m
+        m += 1
 
 
 # --------------------------------------------------------------------------------------
@@ -376,6 +416,30 @@ class Plan:
     interp: int = 1             # multiplicateur d'images par seconde (RIFE)
     out_fps: str = ""           # fréquence de sortie (fraction)
     clean: str = ""             # filtre de nettoyage des défauts de compression (vide = aucun)
+    # fluidité personnalisée : ratio exact sortie/source (fraction) ; interp = finesse M de la
+    # grille RIFE. Vide pour les multiplicateurs x2/x3/x4 (comportement d'origine inchangé).
+    interp_ratio: str = ""
+
+    def out_frames(self, n: int) -> int:
+        """Nombre d'images de sortie pour n images source (même durée)."""
+        if self.interp_ratio:
+            r = Fraction(self.interp_ratio)
+            return -(-n * r.numerator // r.denominator)
+        return n * self.interp
+
+    def custom_count(self, hi: int) -> int:
+        """Fluidité personnalisée : nombre d'images de sortie j dont le point de grille
+        G(j) = arrondi(j·M/ratio) est <= hi (indices de grille globaux, M points par image)."""
+        if hi < 0:
+            return 0
+        r, m = Fraction(self.interp_ratio), self.interp
+        p, q = r.numerator, r.denominator
+        return -(-(p * (2 * hi + 1)) // (2 * m * q))
+
+    def custom_grid(self, j: int) -> int:
+        r, m = Fraction(self.interp_ratio), self.interp
+        p, q = r.numerator, r.denominator
+        return (2 * j * m * q + p) // (2 * p)
 
 
 def _even(x: float) -> int:
@@ -398,15 +462,28 @@ def make_plan(info: VideoInfo, settings: Settings) -> Plan:
     factor = target_factor(info, settings.output_size)
     interp = settings.interp_factor
     notes = []
+    custom = None
+    if settings.interpolation == INTERP_CUSTOM:
+        custom = custom_interp(info.fps, settings.interp_fps)
+        if custom is None:
+            notes.append(f"La vidéo est déjà à {info.fps_float:.3f} i/s (≥ {settings.interp_fps:g} "
+                         "demandés) : fréquence d'origine conservée.")
+        else:
+            interp = custom[1]
     if settings.output_size == "x1":
         if interp <= 1:
+            if custom is None and settings.interpolation == INTERP_CUSTOM:
+                raise UpscaleError(
+                    f"« Taille d'origine » : la vidéo est déjà à {info.fps_float:.2f} i/s, soit "
+                    f"autant ou plus que les {settings.interp_fps:g} i/s demandés. Choisissez une "
+                    "fréquence plus élevée ou une taille de sortie plus grande.")
             raise UpscaleError(
                 "« Taille d'origine » ne fait rien sans interpolation : choisissez une taille de "
                 "sortie plus grande, ou activez l'interpolation d'images.")
-        return _make_interp_only_plan(info, settings, interp)
+        return _make_interp_only_plan(info, settings, interp, custom)
     if factor <= 1.0:
         if interp > 1:  # vidéo déjà assez grande : on garde l'interpolation seule
-            plan = _make_interp_only_plan(info, settings, interp)
+            plan = _make_interp_only_plan(info, settings, interp, custom)
             plan.notes.append(f"La vidéo fait déjà {info.width}x{info.height} : pas d'agrandissement, "
                               "interpolation seulement.")
             return plan
@@ -436,10 +513,19 @@ def make_plan(info: VideoInfo, settings: Settings) -> Plan:
 
     if info.color_space.startswith("bt2020"):
         notes.append("Vidéo HDR / BT.2020 détectée : la sortie sera en SDR BT.709.")
+    if custom is not None:
+        batch = max(16, batch // math.ceil(custom[0]))
+        return Plan(ai_scale, ai_w, ai_h, out_w, out_h, ",".join(dec), ",".join(enc), batch, notes,
+                    upscale=True, interp=interp, out_fps=_mul_fps(info.fps, custom[0]),
+                    interp_ratio=_frac_str(custom[0]))
     if interp > 1:
         batch = max(16, batch // interp)
     return Plan(ai_scale, ai_w, ai_h, out_w, out_h, ",".join(dec), ",".join(enc), batch, notes,
                 upscale=True, interp=interp, out_fps=_mul_fps(info.fps, interp))
+
+
+def _frac_str(fr: Fraction) -> str:
+    return f"{fr.numerator}/{fr.denominator}"
 
 
 def _mul_fps(fps: str, k: int) -> str:
@@ -463,11 +549,21 @@ def _decode_filter(info: VideoInfo, settings: Settings) -> str:
     return ",".join(dec)
 
 
-def _make_interp_only_plan(info: VideoInfo, settings: Settings, interp: int) -> Plan:
+def _make_interp_only_plan(info: VideoInfo, settings: Settings, interp: int,
+                           custom=None) -> Plan:
     w, h = _even(info.width), _even(info.height)
     enc = [f"scale={w}:{h}:flags=lanczos:out_color_matrix=bt709:out_range=tv", "format=yuv420p"]
     if info.sar:
         enc.append("setsar=" + info.sar.replace(":", "/"))
+    if custom is not None:
+        batch = int(1.5e9 / max(info.width * info.height * 3 * 0.6 * math.ceil(custom[0]), 1))
+        batch = max(16, min(300, batch))
+        notes = []
+        if info.color_space.startswith("bt2020"):
+            notes.append("Vidéo HDR / BT.2020 détectée : la sortie sera en SDR BT.709.")
+        return Plan(1, info.width, info.height, w, h, _decode_filter(info, settings),
+                    ",".join(enc), batch, notes, upscale=False, interp=interp,
+                    out_fps=_mul_fps(info.fps, custom[0]), interp_ratio=_frac_str(custom[0]))
     batch = int(1.5e9 / max(info.width * info.height * 3 * 0.6 * interp, 1))
     batch = max(16, min(300, batch))
     notes = []
@@ -1243,7 +1339,10 @@ class Upscaler:
                         f"{plan.ai_w}x{plan.ai_h}) – modèle {settings.model}")
         else:
             self.on_log(f"Sortie : {plan.out_w}x{plan.out_h} (taille d'origine)")
-        if plan.interp > 1:
+        if plan.interp_ratio:
+            self.on_log(f"Interpolation RIFE personnalisée : {info.fps_float:.3f} → "
+                        f"{float(Fraction(plan.out_fps)):.3f} images/s (grille 1/{plan.interp})")
+        elif plan.interp > 1:
             self.on_log(f"Interpolation RIFE x{plan.interp} : {info.fps_float:.3f} → "
                         f"{float(Fraction(plan.out_fps)):.3f} images/s")
         for n in plan.notes:
@@ -1279,7 +1378,7 @@ class Upscaler:
         self._state, self._job_dir = state, job_dir
         self._on_state = on_state or (lambda st: None)
         self._samples, self._t_start, self._last_report = collections.deque(), time.monotonic(), 0.0
-        self._total = max(1, info.frames * plan.interp)
+        self._total = max(1, plan.out_frames(info.frames))
 
         work = tools.make_work_dir("upv_", settings.temp_dir or None)
         finished = False
@@ -1340,8 +1439,12 @@ class Upscaler:
         self._t_start = time.monotonic()
         self._last_report = 0.0
         self._interp = plan.interp
+        self._plan = plan
+        self._batch_src = {}
         self._tail_dups = max(0, plan.interp - 1)
-        self._total = max(1, info.frames * plan.interp)
+        if plan.interp_ratio:  # personnalisé : maintien final ajouté au dernier lot (_interpolate)
+            self._tail_dups = 0
+        self._total = max(1, plan.out_frames(info.frames))
         if st["p0"] is None:
             st["p0"] = first_frame_index(info)
             self._save_state()
@@ -1370,7 +1473,7 @@ class Upscaler:
                 self.on_log(f"{len(cuts)} changement(s) de plan détecté(s).")
                 self._samples = collections.deque()
                 self._t_start = time.monotonic()
-                self._total = max(1, info.frames * plan.interp)
+                self._total = max(1, plan.out_frames(info.frames))
         self._cuts = set(st["cuts"] or [])
         start = int(st["src_done"])
         self._src_seen = start
@@ -1469,9 +1572,16 @@ class Upscaler:
                        start: int) -> None:
         try:
             index, batch, count, folder = start, 0, 0, None
+            # fluidité personnalisée : un lot plein n'est envoyé qu'à l'arrivée de l'image suivante,
+            # pour savoir si c'est le dernier (il reçoit alors les images finales de maintien)
+            custom, held = bool(self._plan.interp_ratio), None
             for png in iter_png_stream(stream):
                 if self._stop.is_set() or self._pausing.is_set():
                     return
+                if held is not None:
+                    if not self._put_or_pause(ai_q, held):
+                        return
+                    held = None
                 if folder is None:
                     folder = os.path.join(work, f"b{batch:05d}_in")
                     os.makedirs(folder, exist_ok=True)
@@ -1480,15 +1590,20 @@ class Upscaler:
                     f.write(png)
                 count += 1
                 if count >= batch_size:
-                    if not self._put_or_pause(ai_q, (folder, count)):
+                    if custom:
+                        held = (folder, count)
+                    elif not self._put_or_pause(ai_q, (folder, count)):
                         return
                     batch, count, folder = batch + 1, 0, None
             if self._pausing.is_set():
                 return
-            if folder is not None and count:
-                if not self._put_or_pause(ai_q, (folder, count)):
+            if held is not None:
+                if not self._put_or_pause(ai_q, held + (True,)):
                     return
-            self._total = max(index * self._interp, 1)
+            if folder is not None and count:
+                if not self._put_or_pause(ai_q, (folder, count) + ((True,) if custom else ())):
+                    return
+            self._total = max(self._plan.out_frames(index), 1)
             self._put_or_pause(ai_q, None)
         except _Stopped:
             pass
@@ -1528,10 +1643,11 @@ class Upscaler:
             if item is None:
                 self._put(enc_q, None)
                 return
-            in_dir, count = item
+            in_dir, count = item[:2]
             src_count, srclast, has_prev = count, None, False
             if plan.interp > 1:
-                res = self._interpolate(settings, plan, info, in_dir, count, log_path)
+                res = self._interpolate(settings, plan, info, in_dir, count, log_path,
+                                        final=len(item) > 2)
                 if res is None:
                     self._put(enc_q, _PAUSE)
                     return
@@ -1564,6 +1680,9 @@ class Upscaler:
             self._done_ai = base + count
             self._report(self._done_ai, "IA", force=True)
             shutil.rmtree(in_dir, ignore_errors=True)
+            meta = self._batch_src.pop(in_dir, None)
+            if meta:
+                shutil.rmtree(meta[0], ignore_errors=True)
             self._put(enc_q, (out_dir, count, src_count, srclast))
 
     def _salvage(self, in_dir: str, out_dir: str, plan: Plan, has_prev: bool):
@@ -1582,6 +1701,9 @@ class Upscaler:
                 break
             n_ok += 1
         k = plan.interp
+        meta = self._batch_src.pop(in_dir, None) if plan.interp_ratio else None
+        if meta:
+            return self._salvage_custom(in_dir, out_dir, names, n_ok, meta)
         if k > 1:
             if has_prev:
                 src = n_ok // k
@@ -1609,8 +1731,40 @@ class Upscaler:
         self.on_log(f"Pause : {keep} image(s) déjà agrandie(s) du lot en cours conservée(s).")
         return (out_dir, keep, src, srclast)
 
+    def _salvage_custom(self, in_dir: str, out_dir: str, names: list, n_ok: int, meta):
+        """Fluidité personnalisée : garde les images de sortie de toutes les images source
+        entièrement traitées (sortie j gardée <=> son point de grille <= dernière source × M)."""
+        src_dir, inputs, locs, has_prev, m = meta
+        n_new = len(inputs) - (1 if has_prev else 0)
+        src, keep = 0, 0
+        for s_ in range(n_new, 0, -1):
+            last = s_ if has_prev else s_ - 1      # indice (dans inputs) de la dernière source
+            kk = sum(1 for i in locs if i <= last * m)
+            if kk <= n_ok:
+                src, keep = s_, kk
+                break
+        srclast = None
+        if src:
+            srclast = out_dir + "_srclast.png"
+            shutil.copyfile(inputs[src if has_prev else src - 1], srclast)
+        kept = {os.path.splitext(n)[0] + ".png" for n in names[:keep]}
+        for n in os.listdir(out_dir):
+            if n not in kept:
+                try:
+                    os.remove(os.path.join(out_dir, n))
+                except OSError:
+                    pass
+        shutil.rmtree(in_dir, ignore_errors=True)
+        shutil.rmtree(src_dir, ignore_errors=True)
+        if not src:
+            shutil.rmtree(out_dir, ignore_errors=True)
+            return None
+        if keep:
+            self.on_log(f"Pause : {keep} image(s) déjà agrandie(s) du lot en cours conservée(s).")
+        return (out_dir, keep, src, srclast)
+
     def _interpolate(self, settings: Settings, plan: Plan, info: VideoInfo, in_dir: str,
-                     count: int, log_path: str):
+                     count: int, log_path: str, final: bool = False):
         """Crée les images intermédiaires d'un lot avec RIFE.
 
         Le lot est précédé de la dernière image du lot précédent, pour interpoler aussi la
@@ -1631,6 +1785,14 @@ class Upscaler:
         out_dir = in_dir[:-3] + "_rin"
         os.makedirs(out_dir, exist_ok=True)
         keep = range(1, k * (n_in - 1) + 1) if has_prev else range(0, k * (n_in - 1) + 1)
+        if plan.interp_ratio:
+            # personnalisé : une image de sortie par instant exact, au point de grille le plus proche
+            lo, hi = g0 * k + keep.start, g0 * k + keep.stop - 1
+            keep = [plan.custom_grid(j) - g0 * k
+                    for j in range(plan.custom_count(lo - 1), plan.custom_count(hi))]
+            if final:  # dernier lot : dernière image maintenue jusqu'à la durée exacte
+                total = g0 + n_in
+                keep += [k * (n_in - 1)] * (plan.out_frames(total) - plan.custom_count(hi))
 
         rife_out = in_dir[:-3] + "_rife"
         if n_in >= 2:
@@ -1670,7 +1832,15 @@ class Upscaler:
         self._prev_last = os.path.join(os.path.dirname(in_dir), "prev_last.png")
         shutil.copyfile(inputs[-1], self._prev_last)
         self._src_seen += len(names)
-        shutil.rmtree(in_dir, ignore_errors=True)
+        if plan.interp_ratio and plan.upscale:
+            # sources gardées jusqu'à la fin de l'IA : une pause en plein lot peut alors
+            # reprendre à une image source exacte (cf. _salvage_custom)
+            src_dir = in_dir[:-3] + "_src"
+            os.replace(in_dir, src_dir)
+            self._batch_src[out_dir] = (src_dir, [os.path.join(src_dir, os.path.basename(x))
+                                                  for x in inputs], list(keep), has_prev, k)
+        else:
+            shutil.rmtree(in_dir, ignore_errors=True)
         shutil.rmtree(rife_out, ignore_errors=True)
         return out_dir, out_index, srclast, has_prev
 

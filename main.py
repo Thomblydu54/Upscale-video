@@ -157,6 +157,42 @@ def selftest(report_path: str) -> int:
 
     check("interpolation RIFE (processeur)", rife_cpu_pipeline)
 
+    # --- fluidité personnalisée (fréquence saisie) : 10 -> 25 i/s, vrai RIFE sur le processeur
+    def custom_fps_pipeline():
+        tmp = tempfile.mkdtemp(prefix="upv_rifec_")
+        clip = os.path.join(tmp, "clip.mp4")
+        tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-y",
+                   "-f", "lavfi", "-i", "testsrc2=size=96x64:rate=10:duration=3",
+                   "-pix_fmt", "yuv420p", clip], check=True,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        orig = engine.make_plan
+
+        def small_batches(info, st):
+            plan = orig(info, st)
+            plan.batch_size = 7
+            return plan
+
+        engine.make_plan = small_batches
+        try:
+            st = engine.Settings(output_size="x1", interpolation="custom", interp_fps=25.0, gpu="-1")
+            out = engine.Upscaler().process(clip, st)
+        except engine.UpscaleError as e:
+            if "RIFE" in str(e):
+                lines.append(f"INFO rife-custom: impossible ici ({str(e)[:300]!r})")
+                return "ignoré"
+            raise
+        finally:
+            engine.make_plan = orig
+        r = tools.run([tools.find_tool("ffprobe"), "-v", "error", "-count_frames", "-select_streams",
+                       "v:0", "-show_entries", "stream=nb_read_frames,r_frame_rate", "-of", "csv=p=0",
+                       out], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        rate, frames = r.stdout.decode().strip().split(",")[:2]
+        if int(frames) != 75 or rate != "25/1":
+            raise RuntimeError(f"attendu 75 images à 25/1, obtenu {frames} à {rate}")
+        return f"10 → 25 i/s : 30 → {frames} images"
+
+    check("fluidité personnalisée (processeur)", custom_fps_pipeline)
+
     # --- pause puis reprise (état persistant, réglages figés) avec le vrai RIFE sur le processeur
     def pause_resume():
         from upscaler import jobs as jobs_mod

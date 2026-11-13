@@ -663,6 +663,8 @@ class Api:
         else:
             if st.interpolation in ("x2", "x3", "x4"):
                 parts.append(f"fluidité {st.interpolation}")
+            elif st.interpolation == engine.INTERP_CUSTOM:
+                parts.append(f"fluidité {st.interp_fps:g} i/s".replace(".", ","))
             enc = engine.ENCODERS_BY_KEY.get(st.encoder)
             codec = "H.265" if enc and enc.codec == "hevc" else "H.264"
             parts.append(f"{codec} {st.container.upper()} · CRF {st.quality}")

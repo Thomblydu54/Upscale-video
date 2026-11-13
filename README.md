@@ -43,7 +43,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    | Animation / Anime – Rapide | dessins animés, anime | ⚡⚡⚡⚡ |
    | Animation / Anime – Haute qualité | anime, rendu plus net | ⚡ |
 3. **Choisissez la résolution de sortie** : x2, x3, x4, 720p, 1080p, 1440p, 4K ou 8K. Vous pouvez aussi garder la *taille d'origine* pour n'utiliser que l'interpolation.
-   - **Fluidité (interpolation IA)** : ×2, ×3 ou ×4 images par seconde (par exemple 30 → 60 i/s), grâce à [RIFE](https://github.com/hzwer/ECCV2022-RIFE). Les changements de plan sont détectés, pour ne jamais fondre deux scènes l'une dans l'autre. Ce réglage ne concerne que les vidéos.
+   - **Fluidité (interpolation IA)** : ×2, ×3 ou ×4 images par seconde (par exemple 30 → 60 i/s), grâce à [RIFE](https://github.com/hzwer/ECCV2022-RIFE). Avec **Perso**, vous entrez vous-même la fréquence de sortie (ex. 50, 60 ou 144 i/s), même si ce n'est pas un multiple de celle de la vidéo. Les changements de plan sont détectés, pour ne jamais fondre deux scènes l'une dans l'autre. Ce réglage ne concerne que les vidéos.
 4. Cliquez sur **Aperçu IA**, ou sur « Aperçu » sur une carte vidéo, puis **choisissez l'image** à tester :
    - glissez sur la pellicule, ou utilisez ← → (image par image) et Maj + ← → (±1 seconde) ;
    - saisissez un temps exact (ex. `1:23`), ou tirez une image au hasard ;

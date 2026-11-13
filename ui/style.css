@@ -599,3 +599,22 @@ input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139,9
 .card-clean[hidden] { display: none; }
 .card-clean svg { flex: none; width: 12px; height: 12px; fill: currentColor; opacity: .9; }
 .card-clean span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ---- v1.7 : fluidité personnalisée */
+.fps-custom { margin-top: 8px; padding: 10px; border-radius: 13px; background: rgba(139,92,246,.07); border: 1px solid rgba(167,139,250,.28); animation: fpsIn .18s ease-out; }
+@keyframes fpsIn { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: none; } }
+.fps-field { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); cursor: text; }
+.fps-field span { flex: 1; font-weight: 600; color: var(--text, #e8e8f5); }
+.fps-field input { width: 74px; height: 32px; padding: 0 10px; border-radius: 9px; text-align: right; font-family: var(--font); font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums;
+  color: #fff; background: rgba(0,0,0,.32); border: 1px solid var(--border-2); outline: none; transition: border-color .15s, box-shadow .15s; }
+.fps-field input:focus { border-color: rgba(167,139,250,.8); box-shadow: 0 0 0 3px rgba(139,92,246,.18); }
+.fps-field input.bad { border-color: #f87171; box-shadow: 0 0 0 3px rgba(248,113,113,.18); }
+.fps-field em { font-style: normal; font-weight: 600; }
+.fps-chips { display: flex; gap: 5px; margin-top: 8px; }
+.fps-chips button { flex: 1; height: 24px; border-radius: 7px; font-size: 11px; font-weight: 600; color: var(--muted); cursor: pointer;
+  background: rgba(0,0,0,.22); border: 1px solid var(--border); transition: all .15s; }
+.fps-chips button:hover { color: #fff; border-color: var(--border-2); }
+.fps-chips button.on { color: #fff; background: var(--grad-soft); border-color: rgba(167,139,250,.65); }
+.fps-note { margin: 7px 2px 0; font-size: 11px; line-height: 1.4; color: var(--muted); }
+.fps-note:empty { display: none; }
+.fps-note.warn { color: #fcd34d; }

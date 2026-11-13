@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## v1.7.0
+- **Fluidité personnalisée** : un nouveau bouton « Perso » dans la section Fluidité. Tapez la fréquence voulue (de 1 à 240 i/s, virgule acceptée, ex. 50, 60, 59,94 ou 144) ou choisissez un raccourci (50 · 60 · 90 · 120 · 144 · 240).
+  - Chaque vidéo sort **exactement** à cette fréquence, avec la même durée et le son synchronisé. Ça marche même quand la fréquence voulue n'est pas un multiple de celle de la vidéo (ex. 24 → 60, 25 → 60, 30 → 50, 29,97 → 60).
+  - RIFE crée les images aux bons instants. Il n'y a ni image dupliquée ni image sautée au milieu de la vidéo, donc pas de saccade.
+  - Une vidéo déjà aussi fluide (ou plus) que la valeur demandée garde sa fréquence d'origine. Un message l'indique sous le champ.
+  - La valeur est figée avec les autres réglages au lancement. La pause, la fermeture et la reprise exacte fonctionnent comme d'habitude.
+- Les boutons existants (Non · ×2 · ×3 · ×4) sont inchangés : les vidéos produites sont identiques, image pour image, à celles de la v1.6.1.
+
 ## v1.6.1
 - **Images par seconde plus claires** : chaque carte affiche maintenant la fréquence réelle de sa vidéo (ex. « 00:04:12 · 24 i/s »).
 - Les boutons « Fluidité » et le résumé tenaient compte uniquement de la **première** vidéo de la liste (ou supposaient 30 i/s quand la liste était vide). Ils affichaient donc souvent « 60 i/s » pour toutes les vidéos. Ils montrent maintenant la plage réelle (ex. « 48 à 60 » pour des vidéos à 24 et 30 i/s), ou « double / triple / quadruple » sans vidéo.
