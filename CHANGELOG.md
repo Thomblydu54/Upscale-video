@@ -1,5 +1,19 @@
 # Journal des modifications
 
+## v1.8.0
+- **Finitions automatiques, image par image** : un nouveau bouton « ✦ Auto » dans la section Finitions. L'application analyse **chaque image** de la vidéo (lumière, contraste, couleurs, teinte chaude ou froide, lumières vives) et lui applique la finition qui lui va le mieux :
+  - **Doré** : lumière chaude (coucher de soleil, intérieur aux bougies) ;
+  - **Glacé** : teinte froide (neige, ciel bleu, nuit bleutée) ;
+  - **Glow anime** : lumières vives sur fond sombre (néons, ville de nuit) ou dessin animé lumineux ;
+  - **Cinéma** : scène sombre ou terne ;
+  - **Netteté seule** : noir et blanc, ou image déjà très colorée ;
+  - **Éclatant** : scène de jour classique.
+- Une vidéo peut donc utiliser une seule finition, deux, ou les six, selon ce qu'elle montre.
+- Pas de clignotement : le changement est franc à chaque changement de plan, et progressif (fondu de 0,6 s) quand la lumière évolue dans un même plan.
+- Une analyse rapide est faite au début du traitement (« Analyse des finitions »). Elle est conservée avec la pause : la reprise après fermeture ou arrêt du PC applique exactement les mêmes choix.
+- Images et aperçu : la finition est choisie pour l'image affichée, et l'aperçu indique laquelle (ex. « Auto → Glacé »).
+- Rien ne change pour les autres options : les finitions désactivées et les préréglages existants donnent exactement le même résultat qu'en v1.7.1.
+
 ## v1.7.1
 - **Fluidité personnalisée : nombres entiers uniquement** (ex. 60, 120, 144). Le champ n'accepte que des chiffres : la virgule, le point et les lettres sont ignorés pendant la frappe. Une ancienne valeur décimale est arrondie.
 

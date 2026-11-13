@@ -892,7 +892,9 @@ class Api:
             self._emit(type="preview_done", id=fid, before=before, after=after, width=w,
                        height=h, name=f["name"], source=f["res"], output=f"{plan.out_w}×{plan.out_h}",
                        model=settings.model, index=index, time=label,
-                       finish=engine.finish_label(settings) if engine.finish_active(settings) else "",
+                       finish=(f"Auto → {engine.FINISH_LABELS.get(self._upscaler.auto_finish_choice, '')}"
+                               if settings.finish == engine.FINISH_AUTO
+                               else engine.finish_label(settings) if engine.finish_active(settings) else ""),
                        clean=engine.clean_for(info, settings).level)
         except Cancelled:
             self._emit(type="preview_failed", error="Aperçu annulé.")

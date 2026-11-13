@@ -28,7 +28,7 @@ from dataclasses import dataclass, field, asdict
 from fractions import Fraction
 from typing import Callable, Optional
 
-from . import tools
+from . import autofinish, tools
 
 # --------------------------------------------------------------------------------------
 # Catalogues
@@ -99,7 +99,9 @@ FINISH_PRESETS: list[tuple[str, str, dict]] = [
                               "finish_glow": 0, "finish_warmth": 0}),
 ]
 FINISH_LABELS = {"off": "Désactivées", "custom": "Personnalisé",
-                 **{k: lbl for k, lbl, _ in FINISH_PRESETS}}
+                 **{k: lbl for k, lbl, _ in FINISH_PRESETS}, "auto": "Auto"}
+# « auto » : la finition est choisie image par image selon son contenu (voir autofinish.py)
+FINISH_AUTO = "auto"
 
 RIFE_BIN = "rife-ncnn-vulkan"
 RIFE_MODEL = "rife-v4.6"
@@ -161,7 +163,7 @@ class Settings:
     interpolation: str = "off"  # off | x2 | x3 | x4 (RIFE)
     image_format: str = "auto"  # auto | png | jpg | webp (sortie des images)
     # finitions optionnelles (désactivées par défaut)
-    finish: str = "off"         # off | custom | clé de FINISH_PRESETS
+    finish: str = "off"         # off | custom | auto | clé de FINISH_PRESETS
     finish_sharp: int = 0       # 0..100  netteté (CAS)
     finish_color: int = 0       # 0..100  couleurs (vibrance)
     finish_contrast: int = 0    # 0..100  contraste (courbe en S)
@@ -845,14 +847,28 @@ def raw_decode_filter(plan: Plan) -> str:
 
 
 def finish_active(settings: Settings) -> bool:
+    if settings.finish == FINISH_AUTO:
+        return True
     return settings.finish != "off" and any(getattr(settings, k) for k in FINISH_KEYS)
+
+
+def finish_preset_settings(settings: Settings, key: str) -> Settings:
+    """Réglages identiques avec la finition `key` (utilisé par le mode auto)."""
+    import dataclasses
+    values = next(v for k, _, v in FINISH_PRESETS if k == key)
+    return dataclasses.replace(settings, finish=key, **values)
+
+
+def finish_auto_presets() -> dict:
+    return {k: v for k, _, v in FINISH_PRESETS}
 
 
 def finish_filter(settings: Settings, height: int, alpha: bool = False) -> str:
     """Chaîne de filtres FFmpeg des finitions (images RGB à la taille finale).
 
-    Retourne "" si les finitions sont désactivées : rien n'est alors ajouté au traitement."""
-    if not finish_active(settings):
+    Retourne "" si les finitions sont désactivées : rien n'est alors ajouté au traitement.
+    (Mode auto : la finition est d'abord choisie pour l'image, cf. Upscaler._auto_finish.)"""
+    if not finish_active(settings) or settings.finish == FINISH_AUTO:
         return ""
     sharp = settings.finish_sharp / 100
     color = settings.finish_color / 100
@@ -887,16 +903,20 @@ def finish_label(settings: Settings) -> str:
     return FINISH_LABELS.get(settings.finish, settings.finish) if finish_active(settings) else ""
 
 
-def build_segment_cmd(info: VideoInfo, plan: Plan, settings: Settings, path: str) -> list:
-    """Encode un morceau de la vidéo agrandie (images PNG sur stdin -> Matroska)."""
+def build_segment_cmd(info: VideoInfo, plan: Plan, settings: Settings, path: str,
+                      auto=None) -> list:
+    """Encode un morceau de la vidéo agrandie (images PNG sur stdin -> Matroska).
+
+    `auto` (finitions auto) : (fichier de commandes, réglages de la 1re image) ; sinon le filtre
+    est exactement celui des autres modes."""
     args = encoder_args(settings)
     if "-tag:v" in args:  # l'étiquette hvc1 n'est utile que dans le MP4 final
         i = args.index("-tag:v")
         del args[i:i + 2]
     return [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error", "-y",
             "-f", "image2pipe", "-framerate", plan.out_fps or info.fps, "-c:v", "png", "-i", "-",
-            "-vf", _with_finish(plan, settings), *args,
-            "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
+            "-vf", _with_finish(plan, settings) if auto is None else _with_auto_finish(plan, auto),
+            *args, "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
             "-color_range", "tv", "-an", "-f", "matroska", path]
 
 
@@ -906,6 +926,56 @@ def _with_finish(plan: Plan, settings: Settings) -> str:
     if not fin:
         return plan.encode_filter
     return f"scale={plan.out_w}:{plan.out_h}:flags=lanczos,{fin},{plan.encode_filter}"
+
+
+def _with_auto_finish(plan: Plan, auto) -> str:
+    cmd_file, first = auto
+    return (f"scale={plan.out_w}:{plan.out_h}:flags=lanczos,"
+            f"{autofinish.filter_graph(first, plan.out_h, cmd_file)},{plan.encode_filter}")
+
+
+def analyze_finish_auto(info: VideoInfo, plan: Plan,
+                        on_frame: Optional[Callable[[int], None]] = None,
+                        register: Optional[Callable] = None,
+                        stop: Optional[Callable[[], bool]] = None) -> "autofinish.Analysis":
+    """Lit toute la vidéo en miniatures (mêmes numéros d'images que le traitement) et note
+    chaque finition pour chaque image."""
+    deint, _ = _split_decode_filter(plan)
+    chain = ",".join(deint + [f"fps={info.fps}",
+                              f"scale={autofinish.AW}:{autofinish.AH}:flags=area", "format=rgb24"])
+    cmd = [tools.find_tool("ffmpeg"), "-hide_banner", "-nostdin", "-loglevel", "error",
+           "-copyts", "-start_at_zero", "-i", info.path, "-map", "0:v:0", "-an", "-sn", "-dn",
+           "-vf", chain, "-fps_mode", "passthrough", "-f", "rawvideo", "-"]
+    proc = tools.popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                       stdin=subprocess.DEVNULL, bufsize=1 << 20)
+    if register:
+        register(proc)
+    an = autofinish.Analysis()
+    size = autofinish.FRAME_BYTES
+    while True:
+        buf = proc.stdout.read(size)
+        if not buf or len(buf) < size:
+            break
+        an.add(buf)
+        if on_frame and an.n % 25 == 0:
+            on_frame(an.n)
+        if stop and stop():
+            proc.kill()
+            break
+    proc.wait()
+    return an
+
+
+def analyze_image_finish(path: str) -> tuple:
+    """Finitions auto pour une seule image : (clé choisie, mesures)."""
+    raw = tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin",
+                     "-i", path, "-frames:v", "1", "-vf",
+                     f"scale={autofinish.AW}:{autofinish.AH}:flags=area,format=rgb24",
+                     "-f", "rawvideo", "-"], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL).stdout
+    if len(raw) < autofinish.FRAME_BYTES:
+        return "eclatant", None
+    f, _ = autofinish.features(raw[:autofinish.FRAME_BYTES])
+    return autofinish.pick(f), f
 
 
 def build_final_cmd(info: VideoInfo, plan: Plan, settings: Settings, list_path: str,
@@ -1108,6 +1178,7 @@ class Upscaler:
         self.on_progress = on_progress or (lambda p: None)
         self._stop = threading.Event()
         self._user_cancel = False
+        self.auto_finish_choice = ""
         self._procs: list[subprocess.Popen] = []
         self._lock = threading.Lock()
         self._errors: list[BaseException] = []
@@ -1287,6 +1358,8 @@ class Upscaler:
             raise UpscaleError(self._ai_error_message(log))
 
         w, h = plan.out_w, plan.out_h
+        if settings.finish == FINISH_AUTO:
+            settings = self._auto_finish(settings, src, "Aperçu : ")
         fin = finish_filter(settings, h)
         if fin:
             self.on_log(f"Aperçu : finitions « {finish_label(settings)} »…")
@@ -1310,6 +1383,14 @@ class Upscaler:
             raise UpscaleError("Création de la comparaison impossible :\n"
                                + proc.stderr.decode("utf-8", "replace")[-800:])
         return cmp_, ai
+
+    def _auto_finish(self, settings: Settings, image: str, prefix: str = "") -> Settings:
+        """Finitions auto pour une image : choisit la finition adaptée à son contenu."""
+        key, f = analyze_image_finish(image)
+        self.auto_finish_choice = key
+        if f is not None:
+            self.on_log(f"{prefix}finitions auto → « {FINISH_LABELS[key]} » ({autofinish.describe(f)}).")
+        return finish_preset_settings(settings, key)
 
     @staticmethod
     def _ai_error_message(log_path: str) -> str:
@@ -1366,7 +1447,9 @@ class Upscaler:
             clean = cl.filter
             self.on_log(f"Nettoyage auto : {cl.label()} – {cl.reason}")
         apply_clean(plan, clean)
-        if finish_active(settings):
+        if settings.finish == FINISH_AUTO:
+            self.on_log("Finitions : Auto (la finition est choisie image par image selon son contenu)")
+        elif finish_active(settings):
             self.on_log(f"Finitions : {finish_label(settings)} (netteté {settings.finish_sharp}, "
                         f"couleurs {settings.finish_color}, contraste {settings.finish_contrast}, "
                         f"halo {settings.finish_glow}, teinte {settings.finish_warmth:+d})")
@@ -1479,6 +1562,9 @@ class Upscaler:
                 self._samples = collections.deque()
                 self._t_start = time.monotonic()
                 self._total = max(1, plan.out_frames(info.frames))
+        self._fcurve = None
+        if settings.finish == FINISH_AUTO:
+            self._prepare_auto_finish(info, plan)
         self._cuts = set(st["cuts"] or [])
         start = int(st["src_done"])
         self._src_seen = start
@@ -1492,6 +1578,51 @@ class Upscaler:
                         f"{len(st['segments'])} morceau(x) déjà prêt(s).")
         self._done_ai = int(st["out_done"])
         self._pipeline(info, plan, settings, work, start)
+
+    def _prepare_auto_finish(self, info: VideoInfo, plan: Plan) -> None:
+        """Finitions auto : analyse de toutes les images (une seule fois, enregistrée pour la
+        reprise), puis courbe des réglages image par image."""
+        st = self._state
+        if st.get("fauto") is None:
+            self._total = max(1, info.frames)
+            self.on_log("Analyse de chaque image pour choisir les finitions…")
+
+            def reg(p):
+                self._register(p)
+
+            an = analyze_finish_auto(info, plan,
+                                     on_frame=lambda n: self._report(n, "Analyse des finitions"),
+                                     register=reg,
+                                     stop=lambda: self._user_cancel or self._pausing.is_set()
+                                     or self._stop.is_set())
+            if self._user_cancel:
+                raise Cancelled()
+            if self._pausing.is_set():
+                raise Paused()
+            if self._stop.is_set():
+                raise _Stopped()
+            runs = an.runs(info.fps_float)
+            st["fauto"] = {"runs": runs, "n": an.n}
+            self._save_state()
+            share = autofinish.stats(runs, an.n)
+            tot = max(1, sum(share.values()))
+            used = ", ".join(f"{FINISH_LABELS[k]} {100 * v / tot:.0f} %"
+                             for k, v in sorted(share.items(), key=lambda kv: -kv[1]))
+            self.on_log(f"Finitions auto : {len(share)} finition(s) utilisée(s) – {used} "
+                        f"({len(runs)} passage(s), {len(an.cuts)} changement(s) de plan).")
+            self._samples = collections.deque()
+            self._t_start = time.monotonic()
+            self._total = max(1, plan.out_frames(info.frames))
+        fa = st["fauto"]
+        self._fcurve = autofinish.Curve(fa["runs"], finish_auto_presets(), info.fps_float,
+                                        int(fa["n"]))
+
+    def _src_of_out(self, plan: Plan, j: int) -> int:
+        """Image source affichée à l'image de sortie n° j (interpolation comprise)."""
+        if plan.interp_ratio:
+            r = Fraction(plan.interp_ratio)
+            return j * r.denominator // r.numerator
+        return j // plan.interp if plan.interp > 1 else j
 
     def _pipeline(self, info: VideoInfo, plan: Plan, settings: Settings, work: str,
                   start: int) -> None:
@@ -1856,9 +1987,28 @@ class Upscaler:
         part = os.path.join(self._job_dir, name + ".part")
         log = os.path.join(work, f"encoder_{n:05d}.log")
         lf = open(log, "wb")
-        proc = self._register(tools.popen(build_segment_cmd(info, plan, settings, part),
-                                          stdin=subprocess.PIPE, stderr=lf,
-                                          stdout=subprocess.DEVNULL, bufsize=1 << 20))
+        if getattr(self, "_fcurve", None) is not None:
+            # finitions auto : réglages de chaque image de ce morceau (commandes FFmpeg)
+            first_out = int(self._state["out_done"])
+            total = plan.out_frames(int(self._state["fauto"]["n"]) or info.frames)
+            count = max(1, min(SEG_MAX_FRAMES + plan.batch_size * max(1, plan.interp) * 3 + 64,
+                               total - first_out + 8))
+            curve = self._fcurve
+            first, text = autofinish.command_lines(
+                lambda i: curve.at(self._src_of_out(plan, first_out + i)), count,
+                float(Fraction(plan.out_fps or info.fps)))
+            cmd_name = f"finitions_{n:05d}.txt"
+            with open(os.path.join(work, cmd_name), "w", encoding="utf-8") as f:
+                f.write(text)
+            proc = self._register(tools.popen(
+                build_segment_cmd(info, plan, settings, os.path.abspath(part),
+                                  auto=(cmd_name, first)),
+                stdin=subprocess.PIPE, stderr=lf, stdout=subprocess.DEVNULL, bufsize=1 << 20,
+                cwd=work))
+        else:
+            proc = self._register(tools.popen(build_segment_cmd(info, plan, settings, part),
+                                              stdin=subprocess.PIPE, stderr=lf,
+                                              stdout=subprocess.DEVNULL, bufsize=1 << 20))
         return {"name": name, "part": part, "proc": proc, "log": log, "lf": lf, "frames": 0,
                 "src": 0, "t0": time.monotonic(), "srclast": None}
 
@@ -2000,6 +2150,8 @@ class Upscaler:
             self._report(1, "Enregistrement", force=True)
             ext = os.path.splitext(output)[1].lower().lstrip(".")
             vf = f"scale={plan.out_w}:{plan.out_h}:flags=lanczos"
+            if settings.finish == FINISH_AUTO:
+                settings = self._auto_finish(settings, src)
             fin = finish_filter(settings, plan.out_h, alpha=info.has_alpha and ext != "jpg")
             if fin:  # finitions optionnelles
                 vf += "," + fin

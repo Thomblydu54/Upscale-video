@@ -157,7 +157,8 @@ const FIN_KEYS = ['finish_sharp', 'finish_color', 'finish_contrast', 'finish_glo
 function buildFinishes(list) {
   S.finishes = list;
   const box = $('#finishPresets');
-  box.innerHTML = list.map((p) => `<button data-v="${esc(p.key)}">${esc(p.label)}</button>`).join('')
+  box.innerHTML = '<button data-v="auto" class="auto" title="L\'IA analyse chaque image et choisit la finition la plus adaptée"><span class="spark">✦</span> Auto<small>choisie image par image</small></button>'
+    + list.map((p) => `<button data-v="${esc(p.key)}">${esc(p.label)}</button>`).join('')
     + '<button data-v="custom" class="custom" title="Réglé à la main avec les curseurs">Personnalisé</button>';
   $$('button', box).forEach((b) => b.addEventListener('click', () => {
     if (b.dataset.v === 'custom') return;  // « Personnalisé » s'active en bougeant un curseur
@@ -192,6 +193,7 @@ function paintFinSlider(el, v) {
 function finishLabel(key) {
   if (!key || key === 'off') return 'Désactivées';
   if (key === 'custom') return 'Personnalisé';
+  if (key === 'auto') return 'Auto · image par image';
   const p = (S.finishes || []).find((x) => x.key === key);
   return p ? p.label : key;
 }
@@ -204,6 +206,9 @@ function applyFinish() {
   $('#finishSection').classList.toggle('on', on);
   $('#finishHint').textContent = finishLabel(st.finish);
   segSet('#finishPresets', st.finish);
+  const auto = st.finish === 'auto';
+  $('#finAuto').hidden = !auto;
+  $$('.fin-slider').forEach((el) => { el.hidden = auto; });
   $$('.fin-slider').forEach((el) => {
     const v = Number(st[el.dataset.k] || 0);
     $('input', el).value = v;

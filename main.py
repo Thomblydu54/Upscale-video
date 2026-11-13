@@ -321,6 +321,55 @@ def selftest(report_path: str) -> int:
 
     check("finitions (filtres)", finish_filters)
 
+    def finish_auto():
+        """Finitions auto : analyse image par image + réglages changés par FFmpeg (sendcmd)
+        pendant l'encodage, sur une vidéo à 3 plans très différents (chaud, froid, noir et blanc)."""
+        tmp = tempfile.mkdtemp(prefix="upv_fauto_")
+        clip = os.path.join(tmp, "plans.mp4")
+        ff = tools.find_tool("ffmpeg")
+        src = "testsrc2=size=128x72:rate=10:duration=1.5"
+        tools.run([ff, "-hide_banner", "-loglevel", "error", "-y",
+                   "-f", "lavfi", "-i", src + ",colorchannelmixer=rr=1:gg=0.6:bb=0.2",
+                   "-f", "lavfi", "-i", src + ",colorchannelmixer=rr=0.3:gg=0.7:bb=1",
+                   "-f", "lavfi", "-i", src + ",hue=s=0",
+                   "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1[v]", "-map", "[v]",
+                   "-pix_fmt", "yuv420p", clip], check=True,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        orig = engine.make_plan
+
+        def small_batches(info, st):
+            plan = orig(info, st)
+            plan.batch_size = 7
+            return plan
+
+        engine.make_plan, orig_seg = small_batches, engine.SEG_MAX_FRAMES
+        engine.SEG_MAX_FRAMES = 10
+        state, logs = {}, []
+        try:
+            st = engine.Settings(output_size="x1", interpolation="x2", gpu="-1", finish="auto")
+            out = engine.Upscaler(on_log=logs.append).process(
+                clip, st, job_dir=os.path.join(tmp, "job"), state=state)
+        except engine.UpscaleError as e:
+            if "RIFE" in str(e):
+                lines.append(f"INFO finitions-auto: RIFE impossible ici ({str(e)[:200]!r})")
+                return "ignoré"
+            raise
+        finally:
+            engine.make_plan, engine.SEG_MAX_FRAMES = orig, orig_seg
+        runs = (state.get("fauto") or {}).get("runs") or []
+        keys = [r[1] for r in runs]
+        if len(set(keys)) < 2:
+            raise RuntimeError(f"une seule finition choisie : {runs}")
+        r = tools.run([tools.find_tool("ffprobe"), "-v", "error", "-count_frames", "-select_streams",
+                       "v:0", "-show_entries", "stream=nb_read_frames", "-of", "csv=p=0", out],
+                      stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if int(r.stdout.decode().strip().split(",")[0]) != 90:
+            raise RuntimeError(f"attendu 90 images, obtenu {r.stdout!r}")
+        shutil.rmtree(tmp, ignore_errors=True)
+        return " → ".join(keys) + " ; 90 images"
+
+    check("finitions auto (image par image)", finish_auto)
+
     def compression_clean():
         """Détection des défauts de compression + traitement complet avec nettoyage (pp7)."""
         tmp = tempfile.mkdtemp(prefix="upv_selftest_")

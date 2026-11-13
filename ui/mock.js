@@ -17,11 +17,14 @@
     ['glace', 'Glacé', { finish_sharp: 35, finish_color: 30, finish_contrast: 30, finish_glow: 35, finish_warmth: -45 }],
     ['net', 'Netteté seule', { finish_sharp: 60, finish_color: 0, finish_contrast: 0, finish_glow: 0, finish_warmth: 0 }],
   ];
-  const finActive = () => settings.finish && settings.finish !== 'off'
+  const finActive = () => settings.finish === 'auto' || settings.finish && settings.finish !== 'off'
     && ['finish_sharp', 'finish_color', 'finish_contrast', 'finish_glow', 'finish_warmth'].some((k) => Number(settings[k]) !== 0);
-  const finLabel = () => (FINISHES.find((x) => x[0] === settings.finish) || [0, 'Personnalisé'])[1];
+  const finLabel = () => settings.finish === 'auto' ? 'Auto' : (FINISHES.find((x) => x[0] === settings.finish) || [0, 'Personnalisé'])[1];
+  // démo du mode auto : finition « choisie » selon l'image d'exemple
+  const autoPick = (f) => ({ city: 'glow', anime: 'eclatant', family: 'dore' }[f.img] || 'cinema');
   // démo : simple approximation des finitions avec les filtres du navigateur
-  async function finishFrame(src) {
+  async function finishFrame(src, vals = settings) {
+    const settings = vals;  // démo : réglages de la finition appliquée
     const im = await loadImg(src);
     const cv = document.createElement('canvas'); cv.width = im.width; cv.height = im.height;
     const ctx = cv.getContext('2d');
@@ -140,7 +143,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.8.0', tag: 'v1.8.0', current: '1.7.1', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.9.0', tag: 'v1.9.0', current: '1.8.0', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -149,7 +152,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.8.0' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.9.0' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -160,7 +163,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.7.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.8.0', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
@@ -219,10 +222,12 @@
       log(`Aperçu : ${f.name}, image ${index + 1}`);
       const hq = await renderFrame(f, index, 1280);
       const fin = finActive();
-      if (fin) log(`Aperçu : finitions « ${finLabel()} »…`);
-      const after = fin ? await finishFrame(hq) : hq;
+      const auto = settings.finish === 'auto' ? FINISHES.find((x) => x[0] === autoPick(f)) : null;
+      const finName = auto ? `Auto → ${auto[1]}` : finLabel();
+      if (fin) log(`Aperçu : finitions « ${finName} »…`);
+      const after = fin ? await finishFrame(hq, auto ? { ...settings, ...auto[2] } : settings) : hq;
       blurred(hq, (before, W, H) => setTimeout(() => {
-        events.push({ type: 'preview_done', id: f.id, before, after, finish: fin ? finLabel() : '', clean: settings.clean !== 'off' ? (f.cleanLevel || '') : '', width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
+        events.push({ type: 'preview_done', id: f.id, before, after, finish: fin ? finName : '', clean: settings.clean !== 'off' ? (f.cleanLevel || '') : '', width: W, height: H, name: f.name, source: f.res, output: outFor(f), model: settings.model, index, time: f.kind === 'image' ? '' : fmtClock(index / 25) });
         running = false; task = '';
       }, 1600));
       return true;

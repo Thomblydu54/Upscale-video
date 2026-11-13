@@ -1,2 +1,2 @@
 """Upscale Video AI – agrandissement de vidéos par IA (Real-ESRGAN + FFmpeg)."""
-__version__ = "1.7.1"
+__version__ = "1.8.0"
