@@ -530,7 +530,13 @@ class Api:
                 summary = self._summary(snapshot, f["info"])
                 if remote:
                     summary += " · PC distant : " + remote["name"]
-                job = self._jobs.create(f["path"], out, snapshot, summary, remote=remote)
+                try:
+                    job = self._jobs.create(f["path"], out, snapshot, summary, remote=remote)
+                except OSError as e:
+                    f.update(state="error", status="Sauvegarde impossible", error=str(e))
+                    self._log(f"✖ {f['name']} : lancement refusé, dossier de reprise non enregistré : {e}")
+                    self._toast("error", "Travail non lancé", "Impossible d'enregistrer ses réglages et sa récupération : " + str(e))
+                    continue
                 f.update(job=job, state="queued", status="En file", progress=0.0, error="", output="")
                 self._compute_out(f)
                 added += 1
@@ -945,7 +951,8 @@ class Api:
                     self._log(f"↻ Reprise à l'image {job.data['state']['src_done']} (avancement enregistré).")
 
                 def on_state(st, job=job, f=f):
-                    self._jobs.update(job, state=copy.deepcopy(st), progress=f.get("progress", 0.0))
+                    self._jobs.update(job, state=copy.deepcopy(st), progress=f.get("progress", 0.0),
+                                      strict=bool(job.data.get("remote")))
 
                 try:
                     out = up.process(job.path, job.settings, job.output, job_dir=job.work,

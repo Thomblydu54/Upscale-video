@@ -42,8 +42,8 @@ def read_json(path, default=None):
         return {} if default is None else default
 
 
-def durable_replace(source, destination) -> None:
-    """Renommage atomique confirmé sur disque avant l'émission d'un reçu de livraison."""
+def durable_replace(source, destination, *, strict: bool = False) -> None:
+    """Renommage atomique ; strict confirme aussi la persistance du répertoire parent."""
     if tools.IS_WIN:
         import ctypes
         from ctypes import wintypes
@@ -59,15 +59,18 @@ def durable_replace(source, destination) -> None:
             time.sleep(0.05)  # lecteur de config / antivirus : partager le fichier sans échouer au hasard
     else:
         os.replace(source, destination)
-        with contextlib.suppress(OSError):
+        try:
             fd = os.open(Path(destination).parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
             try:
                 os.fsync(fd)
             finally:
                 os.close(fd)
+        except OSError:
+            if strict:
+                raise
 
 
-def atomic_bytes(path, content: bytes) -> None:
+def atomic_bytes(path, content: bytes, *, strict: bool = False) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     # Plusieurs processus peuvent écrire des fichiers différents dans le même dossier.
@@ -78,14 +81,14 @@ def atomic_bytes(path, content: bytes) -> None:
             f.write(content)
             f.flush()
             os.fsync(f.fileno())
-        durable_replace(tmp, path)
+        durable_replace(tmp, path, strict=strict)
     finally:
         with contextlib.suppress(OSError):
             tmp.unlink()
 
 
-def atomic_json(path, data) -> None:
-    atomic_bytes(path, json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8"))
+def atomic_json(path, data, *, strict: bool = False) -> None:
+    atomic_bytes(path, json.dumps(data, ensure_ascii=False, allow_nan=False).encode("utf-8"), strict=strict)
 
 
 def _dpapi(data: bytes, decrypt=False) -> bytes:

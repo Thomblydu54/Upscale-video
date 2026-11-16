@@ -177,9 +177,13 @@ votre box, votre pare-feu, vos pilotes GPU ni votre débit à distance.
 - Sur le **PC de calcul**, les mêmes choix gardent le service sans fenêtre actif ou l'arrêtent
   après enregistrement de l'avancement. Le choix de démarrage à l'ouverture de session Windows
   n'est pas modifié ; la réouverture de l'application peut relancer le service.
-- Cette fonction nécessite l'application **1.9.2** et l'extension **Calcul à distance 1.0.2**
+- Cette fonction nécessite l'application **1.9.3** et l'extension **Calcul à distance 1.0.3**
   (sur les deux PC). Mettez l'application à jour, puis **Extensions → Actualiser → Mettre à jour**.
   Terminez les travaux en attente avant de mettre l'extension à jour. Appairage et réglages conservés.
+- Un crash de l'application ou l'arrêt brutal du PC principal n'envoie pas de pause au PC de calcul.
+  Si celui-ci a reçu et vérifié toute la source, il continue le calcul et conserve le résultat hors ligne ;
+  au retour du principal, la reprise/récupération se fait automatiquement. Source incomplète ou fichier
+  pas encore transmis : attente du principal. Le PC de calcul doit rester allumé.
 - Les sources et résultats se transfèrent par blocs avec reprise. Les checkpoints du
   moteur sont conservés sur le PC GPU. Après un arrêt, aucun calcul déjà confirmé n'est
   répété ; les lots non confirmés peuvent être refaits comme dans le traitement local.

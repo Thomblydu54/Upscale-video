@@ -55,8 +55,13 @@ class Worker:
                        "uploading": "Retour du résultat", "paused": "Traitement en pause",
                        "error": "Erreur de traitement"}.get(status, status)
         self.progress = progress or self.progress
-        return self.client.post(f"/v1/jobs/{job['id']}/report", {
+        remote = self.client.post(f"/v1/jobs/{job['id']}/report", {
             "status": status, "progress": self.progress, "error": error, "log": self.last_log})
+        allowed_status = set(TERMINAL) | {"queued", "receiving", "running", "paused", "uploading", "ready", "error"}
+        if (not isinstance(remote.get("status"), str) or remote["status"] not in allowed_status
+                or remote.get("desired") not in ("run", "pause", "cancel", "cleanup")):
+            raise ProtocolError("État de commande du relais incomplet ou invalide.", 502)
+        return remote
 
     def _check(self, job, status, progress=None):
         if self.stop.is_set():
@@ -162,7 +167,7 @@ class Worker:
                         f.flush()
                         os.fsync(f.fileno())
                         offset += len(content)
-                        if time.monotonic() - last > 1:
+                        if offset < job["source_size"] and time.monotonic() - last > 1:
                             self._check(job, "receiving", {"done": offset, "total": job["source_size"], "stage": "Envoi vers le PC de calcul"})
                             last = time.monotonic()
                 self.status = "Vérification de la source (SHA-256)"
@@ -193,6 +198,27 @@ class Worker:
         if self.stop.is_set():
             raise engine.Paused()
 
+    def _check_ready_to_compute(self, job, progress):
+        """Seulement après réception ET vérification de toute la source.
+
+        Une panne du principal n'est pas une commande de pause. Le travail autorisé
+        peut démarrer/finir avec ses données locales, sans dépendre d'un heartbeat.
+        """
+        try:
+            self._check(job, "running", progress)
+        except (OSError, ProtocolError) as e:
+            if isinstance(e, ProtocolError) and e.status < 500:
+                raise  # certificat/appairage refusé ou requête invalide ≠ coupure réseau
+            self._local_check()
+            if job.get("status") in TERMINAL or job.get("desired") in ("cancel", "cleanup"):
+                raise engine.Cancelled() from e
+            if job.get("desired") != "run" or job.get("status") == "error":
+                raise engine.Paused() from e  # ne jamais relancer une pause/erreur connue
+            self.status = "Calcul autonome · PC principal momentanément inaccessible"
+            self._log("Source reçue et vérifiée : calcul poursuivi sans le PC principal. "
+                      "Le résultat sera conservé jusqu'à son retour et à la réception vérifiée.")
+        self._local_check()  # un arrêt explicite du service reste prioritaire
+
     def _compute(self, job, source, result, folder, state, state_path):
         settings = engine.Settings.from_dict(safe_settings(job["settings"], job["settings"].get("gpu", "auto")))
         # Les fichiers temporaires restent confinés au travail de l'extension.
@@ -208,6 +234,7 @@ class Worker:
             with progress_lock:
                 progress.update(values)
 
+        self._check_ready_to_compute(job, dict(progress))
         up = self.factory(on_log=self._log, on_progress=record_progress)
 
         def monitor():
@@ -219,15 +246,25 @@ class Worker:
                     with progress_lock:
                         snapshot = dict(progress)
                     remote = self._report(job, "running", snapshot)
-                    self.client.post("/v1/worker/ping", {"version": __version__, "gpus": self.gpus,
-                                                       "gpu": self.config.get("gpu", "auto"), "name": self.config.get("name", "PC de calcul")})
+                    # Appliquer un ordre reçu AVANT le ping : le principal peut tomber
+                    # juste après sa réponse, sans invalider cette pause / cet abandon.
                     if remote["status"] in TERMINAL or remote["desired"] in ("cancel", "cleanup"):
                         up.cancel()
                         return
                     if remote["desired"] == "pause":
                         up.pause()
                         return
-                except (OSError, ProtocolError):
+                    self.client.post("/v1/worker/ping", {"version": __version__, "gpus": self.gpus,
+                                                       "gpu": self.config.get("gpu", "auto"), "name": self.config.get("name", "PC de calcul")})
+                except ProtocolError as e:
+                    if e.status < 500:
+                        # Refus TLS/appairage/autorisation : arrêter proprement, jamais contourner.
+                        self.status = "Liaison refusée · calcul mis en pause"
+                        up.pause()
+                        return
+                    # Erreur temporaire du relais : garder le checkpoint et continuer.
+                    self.status = "Calcul en cours · PC principal momentanément inaccessible"
+                except OSError:
                     # Une coupure du PC principal n'annule PAS un calcul GPU déjà lancé.
                     self.status = "Calcul en cours · PC principal momentanément inaccessible"
 
@@ -235,7 +272,6 @@ class Worker:
             state["checkpoint"] = copy.deepcopy(data)
             atomic_json(state_path, state)
 
-        self._check(job, "running", dict(progress))
         thread = threading.Thread(target=monitor, daemon=True)
         thread.start()
         try:

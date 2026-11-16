@@ -152,16 +152,32 @@ class Client:
             conn.request(method, path, body=body, headers=headers)
             response = conn.getresponse()
             maximum = CHUNK if raw and response.status == 200 else JSON_LIMIT
+            expected = response.length
             content = response.read(maximum + 1)
             if len(content) > maximum:
                 raise ProtocolError("Réponse du relais trop volumineuse.")
+            if expected is not None and len(content) != expected:
+                # read(amt) peut rendre un corps tronqué sans lever IncompleteRead.
+                # Une coupure brutale ne doit pas tuer le moniteur de commandes.
+                raise ConnectionError("La réponse du relais a été interrompue.")
             if response.status != 200:
                 try:
-                    error = json.loads(content).get("error", "Erreur du relais.")
-                except ValueError:
+                    payload = json.loads(content)
+                    error = payload.get("error", "Erreur du relais.") if isinstance(payload, dict) else "Réponse du relais invalide."
+                except (ValueError, UnicodeError):
                     error = "Réponse du relais invalide."
                 raise ProtocolError(error, response.status)
-            return content if raw else json.loads(content)
+            if raw:
+                return content
+            try:
+                result = json.loads(content)
+            except (ValueError, UnicodeError) as e:
+                raise ProtocolError("Réponse JSON du relais invalide.", 502) from e
+            if not isinstance(result, dict):
+                raise ProtocolError("Réponse JSON du relais invalide.", 502)
+            return result
+        except http.client.HTTPException as e:
+            raise ConnectionError("La connexion au relais a été interrompue.") from e
         finally:
             conn.close()
 

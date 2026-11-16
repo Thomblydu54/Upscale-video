@@ -37,17 +37,11 @@ def jobs_root() -> str:
     return path
 
 
-def _write_json(path: str, data: dict) -> None:
-    """Écriture atomique : un arrêt brutal ne laisse jamais un fichier à moitié écrit."""
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=1, ensure_ascii=False)
-        f.flush()
-        try:
-            os.fsync(f.fileno())
-        except OSError:
-            pass
-    os.replace(tmp, path)
+def _write_json(path: str, data: dict, *, strict: bool = False) -> None:
+    """Journal atomique ; strict confirme fsync du fichier et du dossier parent."""
+    # Import tardif : le runtime utilise lui-même data_dir() pour son stockage privé.
+    from .extension_runtime import atomic_json
+    atomic_json(path, data, strict=strict)
 
 
 class Job:
@@ -91,22 +85,36 @@ class JobStore:
         if remote:
             job.data["remote"] = dict(remote, request_id=jid)
         os.makedirs(job.folder, exist_ok=True)
-        self.save(job)
+        if remote and os.name != "nt":
+            # Persister l'entrée du nouveau dossier de job avant que le worker distant
+            # puisse recevoir le média ; son job.json est fsyncé juste après.
+            fd = os.open(jobs_root(), os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+            try:
+                os.fsync(fd)
+            finally:
+                os.close(fd)
+        self.save(job, strict=bool(remote))  # ne rien envoyer sans dossier de récupération durable
         return job
 
     def save(self, job: Job, *, strict: bool = False) -> None:
         with self._lock:
             try:
                 os.makedirs(job.folder, exist_ok=True)
-                _write_json(os.path.join(job.folder, "job.json"), job.data)
+                _write_json(os.path.join(job.folder, "job.json"), job.data, strict=strict)
             except OSError:
                 if strict:
                     raise
 
-    def update(self, job: Job, **values) -> None:
+    def update(self, job: Job, *, strict: bool = False, **values) -> None:
         with self._lock:
+            previous = dict(job.data) if strict else None
             job.data.update(values)
-            self.save(job)
+            try:
+                self.save(job, strict=strict)
+            except OSError:
+                job.data.clear()
+                job.data.update(previous)
+                raise
 
     def delete(self, job: Job) -> None:
         with self._lock:

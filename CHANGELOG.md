@@ -1,5 +1,13 @@
 # Journal des modifications
 
+## v1.9.3
+- **Le PC de calcul continue après un crash de l'application principale ou l'arrêt brutal du PC principal**, sans dépendre de son événement de fermeture. Le service relais est détaché de la fenêtre ; une source complète et vérifiée autorisée peut commencer/finir même si le relais disparaît à la frontière transfert → calcul.
+- Le PC de calcul garde checkpoints et résultat local jusqu'au retour du principal ; l'application récupère automatiquement avec le même travail et les mêmes réglages, sans recalcul d'un résultat déjà terminé ni reçu anticipé. Les réglages/checkpoints du PC principal sont écrits de façon durable avant envoi.
+- Une source incomplète et les fichiers pas encore transmis restent en attente. Le PC de calcul doit rester allumé ; l'arrêt ou redémarrage du PC de calcul n'est pas couvert par la poursuite hors ligne.
+- Les ordres explicites pause/annulation déjà reçus et l'arrêt volontaire du service restent prioritaires. Une erreur de certificat/appairage/autorisation met le calcul en pause ; une perte réseau ordinaire ne devient pas une pause.
+- **Calcul à distance 1.0.3**, nécessitant l'application **1.9.3**. Après mise à jour sur les deux PC, l'appairage existant et les travaux/résultats en attente restent conservés.
+- Régressions ajoutées : arrêt forcé réel du processus interface sans hook de fermeture, perte simultanée du relais, coupure après le dernier bloc source, source tronquée, reprise après retour, commandes, refus TLS, réponse HTTP tronquée et absence de recalcul. Aucune extinction physique de deux PC avec GPU réel n'a été simulée.
+
 ## v1.9.2
 - **Choix à la fermeture pendant un calcul distant** : la croix affiche **« Fermer et continuer sur le PC de calcul »** ou **« Fermer et mettre en pause »**. La croix de la boîte de dialogue et Échap permettent de rester dans l'application sans arrêter le travail.
 - **Continuer** détache uniquement le suivi local : aucun ordre de pause/abandon, aucune suppression de checkpoint ou de résultat non reçu. Le relais reste actif en arrière-plan. À la réouverture, reconnexion et récupération automatiques avec les réglages figés au lancement.
