@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 
 from upscaler import tools
-from upscaler.extension_runtime import sha256_file, tls_identity
+from upscaler.extension_runtime import RemoteDetached, sha256_file, tls_identity
 from .common import CHUNK, Client, ProtocolError, token
 from .hub import Hub, Server
 from .runner import RemoteRunner
@@ -67,6 +67,8 @@ def run():
             assert (folder / "worker" / job["id"]).exists(), "Suppression prématurée !"
             assert hub.state["jobs"][job["id"]]["status"] == "ready"
 
+            commands = []
+
             class LocalPlugin:
                 def ensure_running(self):
                     pass
@@ -75,18 +77,35 @@ def run():
                     return controller
 
                 def command(self, request_id, desired):
-                    pass
+                    commands.append(desired)
 
             target = {"worker": identity["id"], "name": "GPU selftest", "request_id": "selftest", "pin": pin}
             output = folder / "received.png"
-            runner = RemoteRunner(LocalPlugin(), target)
-            runner.process(str(source), settings, str(output))
+            state = {}
+
+            def progress(value):
+                if value.stage == "Récupération du résultat amélioré":
+                    runner.detach()
+
+            runner = RemoteRunner(LocalPlugin(), target, on_progress=progress)
+            try:
+                runner.process(str(source), settings, str(output), on_state=lambda value: state.update(value))
+            except RemoteDetached:
+                pass
+            else:
+                raise AssertionError("Le suivi local ne s'est pas détaché.")
+            assert commands == ["run"], "Un détachement ne doit pas demander de pause/abandon."
+            assert state["remote_id"] == job["id"]
+            assert hub.state["jobs"][job["id"]]["status"] == "ready", "Reçu envoyé avant récupération !"
+            worker.step()
+            assert (folder / "worker" / job["id"]).exists(), "Suppression après simple détachement !"
+            RemoteRunner(LocalPlugin(), target).process(str(source), settings, str(output), state=state)
             assert hashlib.sha256(output.read_bytes()).hexdigest() == sha256_file(source)
             worker.step()
             assert not (folder / "worker" / job["id"]).exists()
             assert not (folder / "hub" / job["id"]).exists()
             assert source.exists()
-            return "TLS épinglé, code unique valable 3 h, transfert >2 Mo, réglages figés, reçu SHA-256 puis nettoyage : OK"
+            return "TLS épinglé, code unique valable 3 h, transfert >2 Mo, réglages figés, détachement sans pause, récupération puis reçu SHA-256 et nettoyage : OK"
         finally:
             server.shutdown()
             server.server_close()

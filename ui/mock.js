@@ -143,7 +143,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.10.0', tag: 'v1.10.0', current: '1.9.0', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.10.0', tag: 'v1.10.0', current: '1.9.2', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -152,7 +152,7 @@
       const t = setInterval(() => {
         d = Math.min(total, d + total / 30);
         events.push({ type: 'update_progress', done: d, total, fraction: d / total });
-        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.9.1' });
+        if (d >= total) { clearInterval(t); events.push({ type: 'update_ready', version: '1.9.2' });
           setTimeout(() => { events.push({ type: 'update_failed', error: "Mode démo : l'installation est simulée.", page: '#' }); }, 2500); }
       }, 100);
       return true;
@@ -163,7 +163,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.9.1', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.9.2', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
@@ -177,6 +177,10 @@
       const lg = logs; logs = [];
       const pending = files.filter((f) => f.frozen && ['queued', 'paused', 'running'].includes(f.state)).length;
       return { events: ev, logs: lg, files: files.map(pub), running, task, progress, pending, pausing: false };
+    },
+    async close_application(choice) {
+      if (choice !== 'cancel') log('Démo : fermeture simulée (' + choice + '), aucun service réel modifié.');
+      return { ok: true };
     },
     async pick_files() { return [addSample(SAMPLES[(nextId - 1) % SAMPLES.length])]; },
     async add_paths(names) { return names.map((n, i) => addSample({ ...SAMPLES[i % 3], name: n })); },

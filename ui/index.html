@@ -514,6 +514,31 @@
     </div>
   </div>
 
+  <!-- La croix native demande quoi faire du travail distant, sans arrêter le calcul. -->
+  <div class="modal close-modal" id="closeModal" hidden>
+    <div class="modal-card small close-card" role="dialog" aria-modal="true" aria-labelledby="closeTitle" aria-describedby="closeNote">
+      <div class="modal-head">
+        <div class="modal-title" id="closeTitle">Fermer l'application ?</div>
+        <button class="icon-btn" id="closeStay" title="Rester dans l'application" aria-label="Annuler la fermeture">×</button>
+      </div>
+      <div class="close-body">
+        <p class="close-intro">Choisissez ce que doit faire le PC de calcul.</p>
+        <div class="close-choices">
+          <button class="close-choice continue" id="closeContinue">
+            <span class="close-symbol" aria-hidden="true">↗</span>
+            <span><b>Fermer et continuer sur le PC de calcul</b><small>Les travaux déjà transmis continuent sans cette fenêtre. Résultat conservé, puis récupéré à votre retour.</small></span>
+          </button>
+          <button class="close-choice pause" id="closePause">
+            <span class="close-symbol" aria-hidden="true">Ⅱ</span>
+            <span><b>Fermer et mettre en pause</b><small>Enregistre l'avancement et demande la pause. Reprise à la réouverture, sans changer vos réglages.</small></span>
+          </button>
+        </div>
+        <p class="close-note" id="closeNote"></p>
+        <p class="close-help">Un travail déjà en pause n'est pas relancé par « Continuer ». Si le PC distant est déconnecté, la demande de pause sera appliquée à sa reconnexion. Aucun résultat non récupéré n'est supprimé.</p>
+      </div>
+    </div>
+  </div>
+
   <!-- Nouveautés d'une mise à jour -->
   <div class="modal" id="notesModal" hidden>
     <div class="modal-card small">

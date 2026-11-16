@@ -1,7 +1,7 @@
 # Extensions officielles — API 1
 
 Les extensions se téléchargent depuis **Extensions** dans l'application. La première est
-**Calcul à distance**, version 1.0.1, compatible avec Upscale Video AI ≥ 1.9.0.
+**Calcul à distance**, version 1.0.2, compatible avec Upscale Video AI ≥ 1.9.2.
 
 ## Développer et publier
 
@@ -30,7 +30,8 @@ cd tests && npm ci && npm test
 
 En CI, `UPV_EXTENSION_TEST_PACKAGE` pointe vers l'archive construite. `main.py --selftest`
 installe cette archive dans un dossier isolé et teste le vrai chargement dynamique depuis
-l'exe : TLS épinglé, appairage unique, transfert multiblocs, reçu SHA-256 et nettoyage.
+l'exe : TLS épinglé, appairage unique, transfert multiblocs, détachement sans pause pendant
+la réception, récupération à la reconnexion, reçu SHA-256 puis nettoyage.
 Il lance aussi le même exe dans un véritable processus service détaché, vérifie son API,
 l'absence de fenêtre visible sous Windows, le démarrage idempotent et son arrêt. Le dossier
 des tests est isolé ; aucune inscription au démarrage du compte de build n'est modifiée.
@@ -57,6 +58,16 @@ ni UPnP, ni DMZ, ni désactivation du pare-feu, ni tunnel tiers ne sont utilisé
 - Les checkpoints du moteur sont sauvegardés atomiquement sur le PC GPU. Une perte du
   relais ne détruit pas le travail ; un calcul déjà lancé peut finir sans connexion, puis
   attend le retour du relais pour transférer le résultat. Les blocs reprennent après coupure.
+- La fermeture de la fenêtre distingue la **pause** du **détachement du contrôleur**.
+  `RemoteRunner.detach()` lève `upscaler.extension_runtime.RemoteDetached` aux points d'arrêt
+  sûrs, sans commande distante. Le dispatcher cesse de lancer des fichiers et conserve les
+  identifiants/empreintes/blocs partiels pour la reprise automatique. Le service relais,
+  indépendant de la fenêtre, reste actif. Avant création de la requête distante, le fichier
+  reste simplement dans la file locale ; on ne promet pas son lancement après fermeture.
+- Sur le PC GPU, fermer en pause arrête le service après checkpoint sans retirer l'opt-in
+  Windows ; fermer en continuant ne touche pas au service. Les commandes pause/abandon
+  hors ligne restent durables. Une sauvegarde impossible ou un arrêt trop long laisse
+  la fenêtre ouverte avec un diagnostic, sans abandon forcé.
 - Après réception, le contrôleur vérifie taille + SHA, synchronise le fichier sur disque,
   renomme `.partiel` en fichier final, **puis** envoie le reçu. Le relais marque durablement
   la livraison avant de supprimer sa copie ; le GPU ne supprime son dossier qu'au prochain

@@ -94,13 +94,14 @@ class JobStore:
         self.save(job)
         return job
 
-    def save(self, job: Job) -> None:
+    def save(self, job: Job, *, strict: bool = False) -> None:
         with self._lock:
             try:
                 os.makedirs(job.folder, exist_ok=True)
                 _write_json(os.path.join(job.folder, "job.json"), job.data)
             except OSError:
-                pass
+                if strict:
+                    raise
 
     def update(self, job: Job, **values) -> None:
         with self._lock:

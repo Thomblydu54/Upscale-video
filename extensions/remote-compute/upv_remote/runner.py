@@ -8,7 +8,7 @@ import time
 from pathlib import Path
 
 from upscaler import engine
-from upscaler.extension_runtime import durable_replace, sha256_file
+from upscaler.extension_runtime import RemoteDetached, durable_replace, sha256_file
 from .common import ProtocolError
 
 
@@ -19,6 +19,7 @@ class RemoteRunner:
         self.log, self.progress = on_log, on_progress
         self.kind, self.time_s = kind, time_s
         self._pause, self._cancel = threading.Event(), threading.Event()
+        self._detached = threading.Event()
         self.auto_finish_choice = ""
         self._started = time.monotonic()
         self._client = None
@@ -35,6 +36,10 @@ class RemoteRunner:
         self.plugin.command(self.target["request_id"], "cancel")
         self._cancel.set()
 
+    def detach(self):
+        # Uniquement arrêter ce contrôleur. Surtout aucun ordre pause/cancel au relais.
+        self._detached.set()
+
     def _check(self):
         desired = "cancel" if self._cancel.is_set() else "pause" if self._pause.is_set() else ""
         if desired:
@@ -46,6 +51,8 @@ class RemoteRunner:
                 raise engine.Cancelled()
             self.log("Pause distante enregistrée. Le PC de calcul l'applique dès qu'il reçoit la demande.")
             raise engine.Paused()
+        if self._detached.is_set():
+            raise RemoteDetached()
 
     def _emit(self, stage, fraction, p=None, transfer=None):
         p = p or {}
@@ -69,8 +76,10 @@ class RemoteRunner:
             self.plugin.ensure_running()
             self._client = self.plugin.controller(self.target.get("pin"))
         except Exception as e:
+            self._check()
             self.log("Calcul distant en pause : " + str(e))
             raise engine.Paused() from e
+        self._check()
         stat = os.stat(path)
         fingerprint = [stat.st_size, stat.st_mtime_ns]
         if self._state.get("remote_source_stat") not in (None, fingerprint):
@@ -96,12 +105,14 @@ class RemoteRunner:
                 self._state["remote_id"] = self._jid
                 self._save(dict(self._state))
             except ProtocolError as e:
+                self._check()
                 if e.status < 500:
                     self.log(str(e))
                     raise engine.Paused() from e
                 self._wait_link(e)
             except OSError as e:
                 self._wait_link(e)
+        self._check()
         self.plugin.command(self.target["request_id"], "run")
         while True:
             self._check()
@@ -109,6 +120,7 @@ class RemoteRunner:
                 self._client.post(f"/v1/jobs/{self._jid}/control", {"desired": "run"})
                 break
             except (OSError, ProtocolError) as e:
+                self._check()
                 if isinstance(e, ProtocolError) and e.status in (401, 403, 404, 495):
                     self.log(str(e))
                     raise engine.Paused() from e
@@ -119,6 +131,7 @@ class RemoteRunner:
             self._check()
             try:
                 job = self._client.get(f"/v1/jobs/{self._jid}")
+                self._check()
                 status, p = job["status"], job.get("progress", {})
                 if job.get("log") and job["log"] != last_log:
                     self.log("[PC distant] " + job["log"])
@@ -150,6 +163,7 @@ class RemoteRunner:
                     self._emit("PC de calcul déconnecté · reconnexion automatique",
                                float(self._state.get("remote_fraction", 0.02)))
             except (OSError, ProtocolError) as e:
+                self._check()
                 if isinstance(e, ProtocolError) and e.status in (401, 403, 404, 495):
                     self.log("Travail conservé en pause : " + str(e))
                     raise engine.Paused() from e
@@ -204,10 +218,12 @@ class RemoteRunner:
                     partial.unlink()
                     self.log("Réception corrompue : nouveau transfert, le résultat distant reste conservé.")
                 except OSError as e:
+                    self._check()
                     self.log("Réception en pause (disque/réseau) : " + str(e))
                     raise engine.Paused() from e
             else:
                 raise engine.Paused()
+        self._check()
         self._client.post(f"/v1/jobs/{self._jid}/ack", {"sha256": sha})
         self.log("Résultat reçu et vérifié. Le PC de calcul peut supprimer ses fichiers de travail.")
         self._emit("Résultat reçu et vérifié", 1)

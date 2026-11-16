@@ -56,7 +56,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 ### Pause et reprise, même après un arrêt du PC
 - Pendant un traitement, le bouton **Pause** enregistre l'avancement sur le disque. Vous pouvez ensuite **fermer l'application ou éteindre le PC**.
 - Au prochain lancement, le traitement **reprend automatiquement à l'image exacte** où il s'était arrêté. Aucune image n'est perdue ni doublée, et le son reste synchronisé.
-- Si vous fermez la fenêtre pendant un traitement, l'application le met d'abord en pause toute seule. Même en cas de coupure de courant ou de plantage, la reprise repart du dernier morceau enregistré (quelques secondes de vidéo au plus).
+- Si vous fermez la fenêtre pendant un traitement **local**, l'application le met d'abord en pause toute seule. Pour le **calcul à distance**, la croix propose de **continuer sur le PC de calcul** ou de **mettre en pause** (voir ci-dessous). Même en cas de coupure de courant ou de plantage, la reprise repart du dernier morceau enregistré (quelques secondes de vidéo au plus).
 - **Les réglages sont figés au moment du clic** : chaque fichier lancé garde le modèle, la résolution, la fluidité et l'encodage choisis à cet instant. Ils sont rappelés sur sa carte (🔒). Changer les réglages ensuite, même après un redémarrage, ne modifie jamais un traitement en cours, en file ou en pause.
 - Pendant un traitement, vous pouvez ajouter d'autres fichiers avec d'autres réglages : **Ajouter à la file**. Ils utiliseront les réglages du moment.
 - **Abandonner** supprime l'avancement enregistré des traitements en pause.
@@ -65,7 +65,7 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
 ### Aucun fichier ne s'accumule
 - Pendant un traitement, chaque lot d'images est supprimé dès qu'il est encodé. À la fin, tous les fichiers de travail sont supprimés.
 - Au démarrage, l'application supprime ce qu'une session interrompue (plantage, coupure de courant) a pu laisser : images temporaires, avancement de traitements qui n'existent plus, fichiers décompressés de l'exe, aperçus de plus de 24 h, mises à jour non installées. Ce qui appartient à une fenêtre encore ouverte n'est jamais supprimé.
-- Seuls les traitements **en pause** gardent leurs données, jusqu'à leur fin ou jusqu'à « Abandonner ».
+- Les traitements **en pause** gardent leurs données jusqu'à leur fin ou jusqu'à « Abandonner ». En calcul distant, les copies sont également conservées tant que le résultat n'a pas été récupéré et vérifié.
 
 ### Ce que l'application gère toute seule
 - La **piste audio** est conservée telle quelle (ou convertie en AAC si le format MP4 ne l'accepte pas). Toutes les pistes audio sont gardées.
@@ -103,7 +103,8 @@ PC principal (application + relais HTTPS privé)  ← Internet →  PC de calcul
 - Le **PC de calcul** reçoit uniquement les médias lancés par le PC principal, utilise
   sa propre carte graphique et renvoie le résultat. Aucun contrôle du bureau ou du système.
 - Le service utilise le **même exe**, en mode sans interface ni console. Après la
-  configuration initiale sur le PC de calcul, vous pouvez fermer sa fenêtre ; il continue.
+  configuration initiale sur le PC de calcul, choisissez **Fermer et continuer sur le PC de calcul**
+  pour fermer sa fenêtre tout en gardant le service actif.
 - Le démarrage automatique est **facultatif**, à cocher sur chaque PC concerné. Il se fait
   **à l'ouverture de votre session Windows, pas avant connexion** ; ce n'est pas un service
   système privilégié. Gardez l'exe à son emplacement (ou rouvrez l'app après l'avoir déplacé).
@@ -159,10 +160,26 @@ votre box, votre pare-feu, vos pilotes GPU ni votre débit à distance.
   comme chemin de sortie sur l'autre PC.
 - La carte montre la destination verrouillée ; la barre affiche l'envoi, le calcul distant,
   le retour et la vérification. Il n'y a **jamais de repli silencieux sur le GPU local**.
-- **Pause**, fermeture du PC principal et reprise de la file gardent leur comportement.
-  Les commandes de pause/abandon sont durables. Si le PC GPU est déconnecté, il ne peut les
-  appliquer qu'à sa reconnexion. Un calcul déjà lancé peut finir pendant une coupure du
-  relais, puis conserver son résultat en attendant le retour du PC principal.
+- **À la croix de fermeture**, deux choix sont proposés pour un travail distant :
+  - **Fermer et continuer sur le PC de calcul** : seul le suivi dans la fenêtre s'arrête.
+    Aucun ordre de pause/abandon n'est envoyé au travail ; le service relais reste actif.
+    Les travaux déjà transmis peuvent continuer et leur résultat sera récupéré
+    automatiquement à la réouverture. Un travail déjà en pause n'est pas relancé par ce choix.
+  - **Fermer et mettre en pause** : demande durable de pause, avancement et réglages conservés,
+    puis fermeture. Si le PC GPU est déconnecté, il ne peut appliquer la demande qu'à sa reconnexion.
+    La réouverture reprend automatiquement la file avec les mêmes réglages.
+  La croix de la boîte de dialogue ou **Échap** annule la fermeture sans arrêter le calcul.
+- **Fermer la fenêtre n'est pas éteindre le PC** : le PC de calcul doit rester allumé.
+  Si vous éteignez aussi le PC principal (qui héberge le relais), le GPU peut finir un
+  calcul dont il a déjà reçu la source, puis conserve son résultat jusqu'au retour du relais.
+  Un transfert incomplet attend ce retour. Les fichiers encore dans la file locale et non
+  transmis attendent la réouverture de l'application ; fermer ne lance pas toute la file à distance.
+- Sur le **PC de calcul**, les mêmes choix gardent le service sans fenêtre actif ou l'arrêtent
+  après enregistrement de l'avancement. Le choix de démarrage à l'ouverture de session Windows
+  n'est pas modifié ; la réouverture de l'application peut relancer le service.
+- Cette fonction nécessite l'application **1.9.2** et l'extension **Calcul à distance 1.0.2**
+  (sur les deux PC). Mettez l'application à jour, puis **Extensions → Actualiser → Mettre à jour**.
+  Terminez les travaux en attente avant de mettre l'extension à jour. Appairage et réglages conservés.
 - Les sources et résultats se transfèrent par blocs avec reprise. Les checkpoints du
   moteur sont conservés sur le PC GPU. Après un arrêt, aucun calcul déjà confirmé n'est
   répété ; les lots non confirmés peuvent être refaits comme dans le traitement local.

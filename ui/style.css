@@ -633,3 +633,20 @@ input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 7px rgba(139,9
 .fin-auto li b { flex: 0 0 92px; color: var(--text); font-weight: 600; }
 .fin-auto .fin-auto-note { font-size: 11px; color: var(--muted-2, #6b6b85); }
 .fin-slider[hidden] { display: none; }
+
+/* Choix de fermeture : au-dessus des autres modales, sans toucher aux options de calcul. */
+.close-modal { z-index: 100; }
+.close-card { width: min(660px, 100%); }
+.close-body { padding: 10px 24px 22px; overflow-y: auto; }
+.close-intro { color: var(--muted); margin: 8px 0 18px; }
+.close-choices { display: grid; gap: 12px; }
+.close-choice { display: flex; align-items: center; gap: 16px; width: 100%; padding: 18px; border: 1px solid var(--border-2); border-radius: 14px; background: var(--surface); text-align: left; cursor: pointer; transition: background .2s, border-color .2s; }
+.close-choice b { display: block; font-size: 14px; line-height: 1.45; }
+.close-choice small { display: block; color: var(--muted); font-size: 12px; line-height: 1.65; margin-top: 5px; }
+.close-choice.continue { background: linear-gradient(110deg, rgba(139,92,246,.12), rgba(34,211,238,.04)); border-color: rgba(139,92,246,.4); }
+.close-choice:hover:not(:disabled), .close-choice:focus-visible { background: var(--surface-3); border-color: var(--violet-2); outline: 2px solid rgba(167,139,250,.3); outline-offset: 2px; }
+.close-choice:disabled { opacity: .42; cursor: not-allowed; }
+.close-symbol { width: 40px; height: 40px; display: grid; place-items: center; flex: none; background: var(--grad-soft); color: var(--cyan); border-radius: 12px; font-size: 22px; }
+.close-choice.pause .close-symbol { color: var(--amber); background: rgba(251,191,36,.07); }
+.close-note { padding: 12px 14px; border-radius: 10px; background: rgba(251,191,36,.045); border: 1px solid rgba(251,191,36,.15); color: #c6bfd0; font-size: 12px; line-height: 1.7; margin: 18px 0 10px; }
+.close-help { color: var(--muted); font-size: 11px; line-height: 1.7; margin-bottom: 0; }

@@ -7,7 +7,6 @@ from fractions import Fraction
 import json
 import os
 import subprocess
-import sys
 import threading
 import time
 import traceback
@@ -17,7 +16,7 @@ from concurrent.futures import ThreadPoolExecutor
 from . import __version__, cleanup, engine, tools, updater
 from .jobs import JobStore
 from .extensions import ExtensionManager
-from .extension_runtime import ExtensionError, atomic_json, private_dir
+from .extension_runtime import ExtensionError, RemoteDetached, atomic_json, private_dir
 from .engine import (ENCODERS, IMAGE_EXT, IMAGE_FORMATS, INTERPOLATIONS, MODELS, OUTPUT_SIZES,
                      SPEEDS, Cancelled, Settings, Upscaler, UpscaleError, fmt_time, fmt_time_ms)
 
@@ -134,6 +133,11 @@ class Api:
         self._pause_req = False
         self._cancel_req = False
         self._closing_ok = False
+        self._close_prompt = False
+        self._closing_in_progress = False
+        self._detach_req = False
+        self._service_startup_done = threading.Event()
+        self._service_startup_done.set()
         self._restored = 0
         self._restore_jobs()
         threading.Thread(target=self._detect_gpus, daemon=True).start()
@@ -353,7 +357,7 @@ class Api:
 
     def extension_install(self, key: str) -> bool:
         with self._lock:
-            if self._extension_busy or self._running:
+            if self._extension_busy or self._running or self._closing_in_progress or self._close_prompt:
                 self._toast("info", "Patientez", "Terminez ou mettez le traitement en pause avant d'installer une extension.")
                 return False
             self._extension_busy = True
@@ -362,7 +366,7 @@ class Api:
 
     def extension_remove(self, key: str) -> bool:
         with self._lock:
-            if self._extension_busy or self._running or any(
+            if self._extension_busy or self._running or self._closing_in_progress or self._close_prompt or any(
                     f.get("job") and f["job"].data.get("remote") for f in self._files.values()):
                 self._toast("info", "Extension utilisée", "Terminez ou abandonnez les travaux distants avant de la désinstaller.")
                 return False
@@ -389,6 +393,8 @@ class Api:
 
     def remote_action(self, action: str, values=None) -> dict:
         try:
+            if self._closing_in_progress or self._close_prompt:
+                raise ExtensionError("Annulez la fermeture avant de modifier le service distant.")
             if not self._remote:
                 raise ExtensionError("Installez d'abord l'extension Calcul à distance.")
             values = values or {}
@@ -449,7 +455,7 @@ class Api:
         with self._lock:
             fid = int(fid)
             f = self._files.get(fid)
-            if not f or f["state"] == "running":
+            if self._closing_in_progress or self._close_prompt or not f or f["state"] == "running":
                 return False
             del self._files[fid]
             self._order.remove(fid)
@@ -459,7 +465,7 @@ class Api:
 
     def clear_files(self) -> bool:
         with self._lock:
-            if self._running:
+            if self._running or self._closing_in_progress or self._close_prompt:
                 return False
             for f in self._files.values():
                 if f.get("job"):
@@ -485,6 +491,8 @@ class Api:
         modifier les réglages ensuite ne change rien pour eux (même après un redémarrage).
         Les traitements en pause sont repris là où ils s'étaient arrêtés."""
         with self._lock:
+            if self._closing_in_progress or self._close_prompt:
+                return False
             if self._extension_busy:
                 self._toast("info", "Installation en cours", "Patientez avant de lancer de nouveaux travaux.")
                 return False
@@ -539,7 +547,7 @@ class Api:
     def resume(self) -> bool:
         """Reprend les traitements en pause / interrompus (sans ajouter de nouveaux fichiers)."""
         with self._lock:
-            if self._running or not self._pending_count():
+            if self._running or self._closing_in_progress or self._close_prompt or not self._pending_count():
                 return False
             self._launch_runner()
         return True
@@ -548,7 +556,7 @@ class Api:
         """Met en pause : l'avancement est enregistré sur le disque ; on peut alors quitter
         l'application ou éteindre le PC, la reprise se fera à l'image près."""
         with self._lock:
-            if not (self._running and self._task == "queue") or self._pause_req:
+            if self._detach_req or not (self._running and self._task == "queue") or self._pause_req:
                 return False
             self._pause_req = True
             up = self._upscaler
@@ -559,6 +567,8 @@ class Api:
 
     def cancel(self) -> bool:
         with self._lock:
+            if self._closing_in_progress:
+                return False
             if self._running and self._task == "queue":
                 self._cancel_req = True
                 up = self._upscaler
@@ -583,7 +593,7 @@ class Api:
 
     def preview(self, fid=None, index=None) -> bool:
         with self._lock:
-            if self._running:
+            if self._running or self._closing_in_progress or self._close_prompt:
                 return False
             ids = [i for i in self._order if self._files[i].get("info")]
             if fid is not None and int(fid) in self._files:
@@ -747,14 +757,26 @@ class Api:
         except Exception:
             pass
         self._cleanup()
-        if self._remote:
+        while True:
+            with self._lock:
+                if self._closing_in_progress:
+                    return
+                if not self._close_prompt:
+                    remote = self._remote
+                    if remote:
+                        self._service_startup_done.clear()
+                    break
+            time.sleep(0.1)
+        if remote:
             try:
-                if self._remote.config().get("enabled"):
-                    self._remote.ensure_running()
-                    if self._remote.config().get("startup"):
-                        self._remote.set_startup(True)  # actualise le chemin si l'exe a été déplacé
+                if remote.config().get("enabled"):
+                    remote.ensure_running()
+                    if remote.config().get("startup"):
+                        remote.set_startup(True)  # actualise le chemin si l'exe a été déplacé
             except Exception as e:
                 self._log("Service distant : " + str(e))
+            finally:
+                self._service_startup_done.set()
         self._auto_resume()
         if self._settings.auto_update:
             time.sleep(4)
@@ -851,11 +873,15 @@ class Api:
                 for f in list(self._files.values()) if f.get("job")):
             time.sleep(0.2)
         time.sleep(1.0)
-        with self._lock:
-            if self._running or not self._pending_count():
-                return
-            n = self._pending_count()
-            self._launch_runner()
+        while True:
+            with self._lock:
+                if self._running or self._closing_in_progress or not self._pending_count():
+                    return
+                if not self._close_prompt:
+                    n = self._pending_count()
+                    self._launch_runner()
+                    break
+            time.sleep(0.1)  # Annuler la fermeture ne doit pas perdre la reprise automatique.
         self._toast("info", "Reprise automatique",
                     f"{n} traitement(s) reprennent exactement là où ils s'étaient arrêtés.")
 
@@ -866,6 +892,7 @@ class Api:
         self._progress = None
         self._pause_req = False
         self._cancel_req = False
+        self._detach_req = False
         for f in self._files.values():
             if f.get("job") and f["state"] == "paused":
                 f.update(state="queued", status="En file")
@@ -875,7 +902,7 @@ class Api:
     def _run_jobs(self) -> None:
         ok = failed = handled = 0
         t0 = time.monotonic()
-        cancelled = paused = False
+        cancelled = paused = detached = False
         try:
             while True:
                 with self._lock:
@@ -884,6 +911,9 @@ class Api:
                         break
                     if self._pause_req:
                         paused = True
+                        break
+                    if self._detach_req:
+                        detached = True
                         break
                     todo = [fid for fid in self._order
                             if self._files[fid].get("job") and self._files[fid]["state"] == "queued"]
@@ -926,6 +956,14 @@ class Api:
                         self._delete_job(job, abandon=False)
                     self._last_output_dir = os.path.dirname(out)
                     self._log(f"✔ Terminé : {out}")
+                except RemoteDetached:
+                    detached = True
+                    with self._lock:
+                        f.update(state="paused", status="Suivi distant conservé pour la réouverture")
+                        self._jobs.update(job, status="paused", progress=f.get("progress", 0.0))
+                    self._log("Suivi local enregistré sans ordre de pause. Les travaux déjà transmis peuvent continuer ; "
+                              "les transferts interrompus et le reste de la file reprendront à la réouverture.")
+                    break
                 except engine.Paused:
                     paused = True
                     with self._lock:
@@ -969,22 +1007,24 @@ class Api:
                             self._delete_job(f["job"])
                             f.update(job=None, state="ready", status="Prêt", progress=0.0)
                             self._compute_out(f)
-                        elif paused:
-                            f.update(state="paused", status="En file (en pause)")
+                        elif paused or detached:
+                            f.update(state="paused", status="En attente de la réouverture" if detached else "En file (en pause)")
                             self._jobs.update(f["job"], status="paused")
         finally:
             with self._lock:
                 self._running = False
                 self._task = ""
                 self._upscaler = None
-                self._pause_req = self._cancel_req = False
-                if paused and self._progress:
-                    self._progress = dict(self._progress, paused=True)
+                self._pause_req = self._cancel_req = self._detach_req = False
+                if (paused or detached) and self._progress:
+                    self._progress = dict(self._progress, paused=paused, detached=detached)
             tools.keep_awake(False)
             elapsed = fmt_time(time.monotonic() - t0)
             self._emit(type="queue_done", ok=ok, failed=failed, cancelled=cancelled, paused=paused,
-                       elapsed=elapsed)
-            if paused:
+                       detached=detached, elapsed=elapsed)
+            if detached:
+                self._toast("info", "Calcul distant conservé", "Le résultat sera récupéré à la réouverture de l'application.")
+            elif paused:
                 self._toast("info", "Traitement en pause",
                             "Avancement enregistré : vous pouvez quitter ou éteindre le PC, "
                             "la reprise se fera automatiquement à la même image.")
@@ -997,33 +1037,157 @@ class Api:
                 self._toast("success", f"{ok} fichier(s) terminé(s) en {elapsed}",
                             "Vos fichiers améliorés sont prêts.")
 
-    def _on_closing(self):
-        """Fermeture de la fenêtre pendant un traitement : mise en pause propre d'abord."""
-        if self._closing_ok or not (self._running and self._task == "queue"):
-            if self._running and self._upscaler:
-                self._upscaler.cancel()  # aperçu en cours
-            return None
-        self._emit(type="closing")
-        threading.Thread(target=self._pause_then_close, daemon=True).start()
-        return False  # annule la fermeture pour l'instant
-
-    def _pause_then_close(self) -> None:
-        self.pause()
-        deadline = time.monotonic() + 60
-        while self._running and time.monotonic() < deadline:
-            time.sleep(0.1)
-        self._closing_ok = True
+    def _close_options(self) -> dict:
+        with self._lock:
+            jobs = [f for f in self._files.values() if f.get("job")]
+            remote_jobs = [f for f in jobs if f["job"].data.get("remote")]
+            active = next((f for f in jobs if f["state"] == "running"), None)
+            queue = self._running and self._task == "queue"
+            active_remote = bool(active and active["job"].data.get("remote"))
+            detachable = active_remote and callable(getattr(self._upscaler, "detach", None))
+            submitted = bool(active_remote and active["job"].data.get("state", {}).get("remote_id"))
+            active = bool(active)
+            stopping = self._pause_req or self._cancel_req
+            preview = self._running and self._task == "preview"
+            # Sans fichier actif (avant le premier / entre deux fichiers), il suffit
+            # de stopper le dispatcher. Ne pas confondre cette transition avec un calcul local.
+            can_continue = not stopping and (not queue or not active or detachable)
         try:
+            remote = self._remote.public() if self._remote else {}
+        except Exception:
+            remote = {}
+        worker = remote.get("role") == "worker" and remote.get("running", False)
+        offer = bool(remote_jobs or worker or (remote.get("role") == "controller" and remote.get("pending")))
+        if stopping:
+            note = "Une pause ou un abandon est déjà demandé. Attendez la fin de cette opération."
+        elif queue and active and not active_remote:
+            note = "Un traitement local doit être mis en pause avant de fermer l'application."
+        elif queue and active and not detachable:
+            note = "Terminez les travaux puis mettez à jour l'extension Calcul à distance pour activer ce choix."
+        elif worker:
+            note = "Ce PC est le PC de calcul : fermer sa fenêtre ne l'éteint pas. Il doit rester allumé pour travailler."
+        elif active_remote and not submitted:
+            note = ("Ce fichier n'est pas encore transmis au relais : si vous fermez maintenant, il attendra "
+                    "la réouverture. Les travaux déjà confiés au PC de calcul ne seront pas arrêtés.")
+        else:
+            note = ("Seuls les travaux déjà transmis peuvent continuer ; le reste de la file attend la réouverture. "
+                    "Si vous éteignez le PC principal, la source doit déjà avoir été reçue par le PC de calcul. "
+                    "Ce dernier doit rester allumé.")
+        if preview:
+            note += " L'aperçu temporaire sera fermé ; il ne fait pas partie de la file persistante."
+        return {"offer": offer, "can_continue": bool(can_continue), "worker": bool(worker), "note": note}
+
+    def _on_closing(self):
+        # Un deuxième événement natif est émis par destroy(). Ne jamais annuler/demander
+        # une pause à ce moment-là, en particulier après le choix « continuer ».
+        with self._lock:
+            if self._closing_ok:
+                return None
+            if self._closing_in_progress or self._close_prompt:
+                return False
+            options = self._close_options()
+            if options["offer"]:
+                self._close_prompt = True
+                self._emit(type="close_requested", **options)
+                return False
+            if self._running and self._task == "queue":
+                self.close_application("pause")  # traitement local : comportement inchangé
+                return False
+            if self._running and self._upscaler:
+                self._upscaler.cancel()  # aperçu uniquement
+            return None
+
+    def close_application(self, choice: str) -> dict:
+        if choice not in ("continue", "pause", "cancel"):
+            return {"ok": False, "error": "Choix de fermeture inconnu."}
+        with self._lock:
+            if self._closing_in_progress:
+                return {"ok": False, "error": "La fermeture est déjà en cours."}
+            if choice == "cancel":
+                self._close_prompt = False
+                return {"ok": True}
+            # Revalider et arrêter le dispatcher sous le MÊME verrou : le fichier
+            # courant peut s'être terminé depuis l'affichage de la modale.
+            options = self._close_options()
+            if choice == "continue" and not options["can_continue"]:
+                return {"ok": False, "error": options["note"], "options": options}
+            task = self._task if self._running else ""
+            active = any(f.get("job") and f["state"] == "running" for f in self._files.values())
+            up = self._upscaler if task != "queue" or active else None
+            request_pause = task == "queue" and choice == "pause" and not self._pause_req
+            self._closing_in_progress = True
+            self._close_prompt = False
+            self._detach_req = choice == "continue"
+            if task == "queue" and choice == "pause":
+                self._pause_req = True
+        self._emit(type="closing", mode=choice)
+        threading.Thread(target=self._finish_close, args=(choice, task, up, request_pause), daemon=True).start()
+        return {"ok": True}
+
+    def _finish_close(self, choice: str, task: str, up, request_pause: bool) -> None:
+        try:
+            with self._lock:
+                jobs = [f["job"] for f in self._files.values() if f.get("job") and f["job"].data.get("remote")]
+            if choice == "continue":
+                if task == "queue" and up:
+                    up.detach()  # aucun ordre au PC distant ; uniquement le suivi local
+                elif up:
+                    up.cancel()  # un aperçu temporaire n'est pas un travail à conserver
+            else:
+                if request_pause:
+                    if up:
+                        up.pause()
+                    self._log("⏸ Mise en pause avant fermeture… (enregistrement de l'avancement)")
+                elif task == "preview" and up:
+                    up.cancel()
+                # Inclut un travail détaché/une pause hors ligne resté dans la file.
+                for job in jobs:
+                    request = job.data["remote"].get("request_id", job.id)
+                    if self._remote:
+                        self._remote.command(request, "pause")
+                    else:
+                        seq = time.time_ns()
+                        atomic_json(private_dir("remote-compute", "commands") / f"{seq:020d}-{job.id}.json",
+                                    {"request_id": request, "desired": "pause", "sequence": seq})
+                if self._remote and self._remote.public().get("role") == "worker":
+                    # Arrêter le service après checkpoint, sans retirer l'opt-in Windows.
+                    # La réouverture de l'app (ou de la session) pourra le relancer.
+                    # Si la croix est cliquée dès le démarrage, ne pas le relancer
+                    # après l'avoir arrêté dans ce thread.
+                    if not self._service_startup_done.wait(30):
+                        raise ExtensionError("Le service démarre encore. Attendez un instant puis réessayez la fermeture.")
+                    self._remote.stop(keep_enabled=True)
+            deadline = time.monotonic() + 60
+            while self._running and time.monotonic() < deadline:
+                time.sleep(0.1)
+            if self._running:
+                raise ExtensionError("L'avancement est encore en cours d'enregistrement. La fenêtre reste ouverte ; réessayez dans quelques instants.")
+            with self._lock:
+                # Ne pas fermer si le disque refuse la sauvegarde (plein, droits…).
+                # Liste fraîche : ne jamais recréer un job terminé pendant la fermeture.
+                for f in self._files.values():
+                    if f.get("job"):
+                        self._jobs.save(f["job"], strict=True)
+                self._save_settings()
+                self._closing_ok = True
             self._window.destroy()
-        except Exception:  # noqa: BLE001
-            os._exit(0)
+        except Exception as e:
+            with self._lock:
+                self._closing_ok = self._closing_in_progress = False
+                # Une requête déjà envoyée au runner reste valable jusqu'à sa sortie.
+                # La retirer ici pourrait lancer le fichier suivant après un délai réseau.
+            self._log("Fermeture interrompue : " + str(e))
+            self._emit(type="close_failed", error=str(e))
 
     def _run_preview(self, fid: int, settings: Settings, index=None, remote=None) -> None:
         f = self._files.get(fid)
         remote_folder = None
         remote_up = None
         try:
-            self._upscaler = Upscaler(on_log=self._log)
+            with self._lock:
+                if self._closing_in_progress:
+                    raise Cancelled()
+                self._upscaler = Upscaler(on_log=self._log)
             info = f["info"]
             if index is None:
                 index = int(info.frames * 0.5)
@@ -1036,7 +1200,10 @@ class Api:
                 if not plan.upscale:
                     raise UpscaleError("L'aperçu nécessite une résolution plus grande que l'original.")
                 remote_up, remote_folder = self._remote.preview(f["path"], settings, t, remote, self._log)
-                self._upscaler = remote_up
+                with self._lock:
+                    if self._closing_in_progress:
+                        raise Cancelled()
+                    self._upscaler = remote_up
                 ai = remote_up.process(f["path"], settings, str(remote_folder / "result.png"))
                 src = str(remote_folder / "original.png")
                 tools.run([tools.find_tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-nostdin", "-y",

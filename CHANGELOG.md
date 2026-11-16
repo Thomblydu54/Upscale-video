@@ -1,5 +1,14 @@
 # Journal des modifications
 
+## v1.9.2
+- **Choix à la fermeture pendant un calcul distant** : la croix affiche **« Fermer et continuer sur le PC de calcul »** ou **« Fermer et mettre en pause »**. La croix de la boîte de dialogue et Échap permettent de rester dans l'application sans arrêter le travail.
+- **Continuer** détache uniquement le suivi local : aucun ordre de pause/abandon, aucune suppression de checkpoint ou de résultat non reçu. Le relais reste actif en arrière-plan. À la réouverture, reconnexion et récupération automatiques avec les réglages figés au lancement.
+- Les travaux déjà transmis peuvent continuer ; les fichiers encore en file locale attendent la réouverture. Éteindre le PC principal coupe son relais : seul un calcul dont la source est déjà reçue peut finir hors ligne, puis son résultat attend le retour du principal. Le PC de calcul doit rester allumé.
+- **Mettre en pause** conserve l'avancement avant fermeture. Une demande hors ligne est appliquée à la reconnexion. Sur le PC de calcul lui-même, le service s'arrête après checkpoint sans modifier le choix de démarrage Windows. La fermeture d'un traitement local continue de demander sa pause automatiquement.
+- **Calcul à distance 1.0.2**, nécessitant l'application **1.9.2** : à mettre à jour depuis **Extensions** sur les deux PC, après avoir terminé les travaux en attente. Appairage, codes valables 3 heures, réglages et garanties de réception SHA-256 conservés.
+- Protection contre les clics répétés, la fin d'un fichier pendant le choix, le lancement du suivant pendant la fermeture et les sauvegardes impossibles. Pas de fermeture forcée avant enregistrement.
+- Tests de fermeture/pause/reconnexion, perte totale du relais, transferts partiels, fermeture avant création et avant reçu final, file persistante et interface. Aucun changement des résolutions, des modèles ni des options de traitement existantes.
+
 ## v1.9.1
 - **Codes d'appairage valables 3 heures** au lieu de 10 minutes, dans l'extension **Calcul à distance 1.0.1**. L'échéance est conservée après redémarrage du relais.
 - L'usage unique et l'invalidation du code précédent à chaque création restent inchangés. Les PC déjà appairés restent connectés ; cette durée concerne uniquement le premier appairage.

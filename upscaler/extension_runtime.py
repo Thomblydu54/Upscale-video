@@ -25,6 +25,10 @@ class ExtensionError(RuntimeError):
     pass
 
 
+class RemoteDetached(Exception):
+    """Le contrôleur cesse le suivi local sans arrêter le travail sur le PC GPU."""
+
+
 def private_dir(*parts: str) -> Path:
     path = Path(data_dir(), "extensions-data", *parts)
     path.mkdir(parents=True, exist_ok=True, mode=0o700)

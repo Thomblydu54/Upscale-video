@@ -352,6 +352,9 @@ function bindUi() {
   });
 
   // modales
+  $('#closeContinue').addEventListener('click', () => chooseClose('continue'));
+  $('#closePause').addEventListener('click', () => chooseClose('pause'));
+  $('#closeStay').addEventListener('click', () => chooseClose('cancel'));
   $('#pvClose').addEventListener('click', closePreview);
   $('#errClose').addEventListener('click', () => ($('#errorModal').hidden = true));
   $('#notesClose').addEventListener('click', () => ($('#notesModal').hidden = true));
@@ -387,6 +390,16 @@ function bindUi() {
     }
   });
   document.addEventListener('keydown', (e) => {
+    if (!$('#closeModal').hidden) {
+      if (e.key === 'Escape') { e.preventDefault(); chooseClose('cancel'); }
+      if (e.key === 'Tab') {
+        const buttons = $$('#closeModal button:not(:disabled)');
+        const i = buttons.indexOf(document.activeElement);
+        e.preventDefault();
+        buttons[(i + (e.shiftKey ? -1 : 1) + buttons.length) % buttons.length]?.focus();
+      }
+      return;
+    }
     if (e.key === 'Escape') {
       if (!$('#errorModal').hidden) $('#errorModal').hidden = true;
       else if (!$('#extensionsModal').hidden) closeExtensions();
@@ -419,6 +432,39 @@ function bindUi() {
   window.addEventListener('resize', () => { if (!$('#previewModal').hidden && PK.mode === 'compare') cmpZoom(CMP.mode === 'custom' ? 'fit' : CMP.mode); });
 }
 
+const CLOSE = { busy: false, options: {}, focus: null };
+
+function showCloseChoice(options) {
+  if (CLOSE.busy) return;
+  if ($('#closeModal').hidden) CLOSE.focus = document.activeElement;
+  CLOSE.options = options;
+  $('#closeModal').hidden = false;
+  $('#closeContinue').disabled = !options.can_continue;
+  $('#closeNote').textContent = options.note || '';
+  $('#closePause').focus(); // Entrée ne doit pas choisir « Continuer » par accident.
+}
+
+async function chooseClose(choice) {
+  if (CLOSE.busy) return;
+  CLOSE.busy = true;
+  $$('#closeModal button').forEach((b) => { b.disabled = true; });
+  try {
+    const response = await API.close_application(choice);
+    if (!response.ok) {
+      if (response.options) CLOSE.options = response.options;
+      $('#closeNote').textContent = response.error || 'La fermeture ne peut pas encore se terminer.';
+      return;
+    }
+    $('#closeModal').hidden = true;
+    if (choice === 'cancel') CLOSE.focus?.focus();
+  } catch (e) { $('#closeNote').textContent = 'Fermeture impossible : ' + String(e); }
+  finally {
+    CLOSE.busy = false;
+    $$('#closeModal button').forEach((b) => { b.disabled = false; });
+    $('#closeContinue').disabled = !CLOSE.options.can_continue;
+  }
+}
+
 async function pickFiles() {
   try { await API.pick_files(); } catch (e) { console.error(e); }
 }
@@ -444,8 +490,13 @@ function handleEvent(ev) {
     case 'extensions_changed': EXT.rendered = ''; updateExtensions(ev.extensions, null); break;
     case 'gpus': setGpus(ev.gpus); break;
     case 'thumb': if (ev.thumb) { S.thumbs.set(ev.id, ev.thumb); const el = cardEls.get(ev.id); if (el) setThumb(el, ev.thumb); } break;
-    case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled && !ev.paused) confetti(); break;
-    case 'closing': toast('info', 'Mise en pause avant fermeture…', 'L\'avancement est enregistré ; le traitement reprendra automatiquement au prochain lancement.'); break;
+    case 'queue_done': if (ev.ok && !ev.failed && !ev.cancelled && !ev.paused && !ev.detached) confetti(); break;
+    case 'close_requested': showCloseChoice(ev); break;
+    case 'close_failed': showError('Fermeture interrompue', ev.error); break;
+    case 'closing':
+      toast('info', ev.mode === 'continue' ? 'Fermeture sans arrêter le PC de calcul…' : 'Mise en pause avant fermeture…',
+        ev.mode === 'continue' ? 'Le suivi est conservé pour la récupération à votre retour.' : 'L’avancement est enregistré ; reprise au prochain lancement.');
+      break;
     case 'preview_started': onPreviewStarted(ev); break;
     case 'update': showUpdate(ev); break;
     case 'update_progress': {

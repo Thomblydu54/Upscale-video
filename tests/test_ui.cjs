@@ -15,7 +15,8 @@ w.HTMLCanvasElement.prototype.toDataURL = () => 'data:image/png;base64,';
 w.Element.prototype.scrollIntoView = () => {};
 w.matchMedia = () => ({ matches: false, addEventListener() {}, addListener() {} });
 w.confirm = () => true;
-w.eval(['mock.js', 'extensions.js', 'app.js'].map((p) => fs.readFileSync(path.join(ui, p), 'utf8')).join('\n;\n'));
+w.eval(['mock.js', 'extensions.js', 'app.js'].map((p) => fs.readFileSync(path.join(ui, p), 'utf8')).join('\n;\n')
+  + '\n;window.__testEvent = handleEvent;');
 const $ = (s) => w.document.querySelector(s);
 const $$ = (s) => [...w.document.querySelectorAll(s)];
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -105,7 +106,69 @@ async function until(fn) { for (let i = 0; i < 100; i++) { if (fn()) return; awa
   assert.equal(edit.gpu, '0');
   assert.equal(edit.startup, true);
   $('#extensionsClose').click();
+  // Croix native : deux choix réels, Échap annule, aucun choix implicite par Entrée.
+  const choices = [];
+  const requestClose = (canContinue = true) => w.__testEvent({
+    type: 'close_requested', can_continue: canContinue, note: 'Le PC de calcul doit rester allumé.'
+  });
+  w.MockApi.close_application = async (choice) => { choices.push(choice); return { ok: true }; };
+  $('#extensionsBtn').click();
+  $('#extensionsClose').focus();
+  requestClose();
+  assert.equal($('#closeModal').hidden, false);
+  assert.equal($('#closeModal [role="dialog"]').getAttribute('aria-modal'), 'true');
+  assert.equal(w.document.activeElement.id, 'closePause');
+  assert.match($('#closeContinue b').textContent, /Fermer et continuer sur le PC de calcul/);
+  assert.match($('#closePause b').textContent, /Fermer et mettre en pause/);
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+  assert.equal(w.document.activeElement.id, 'closeStay');
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+  assert.equal(w.document.activeElement.id, 'closePause');
+  w.document.dispatchEvent(new w.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await until(() => $('#closeModal').hidden);
+  assert.deepEqual(choices, ['cancel']);
+  assert.equal($('#extensionsModal').hidden, false); // Échap n'atteint pas la modale dessous
+  assert.equal(w.document.activeElement.id, 'extensionsClose');
+  $('#extensionsClose').click();
+  let finishChoice;
+  w.MockApi.close_application = (choice) => { choices.push(choice); return new Promise((resolve) => { finishChoice = resolve; }); };
+  requestClose();
+  $('#closeContinue').click();
+  $('#closeContinue').click();
+  $('#closePause').click();
+  requestClose(); // événement natif répété pendant l'enregistrement : aucune réactivation
+  assert.equal($('#closeContinue').disabled, true);
+  assert.equal($('#closePause').disabled, true);
+  assert.equal($('#closeStay').disabled, true);
+  assert.deepEqual(choices, ['cancel', 'continue']);
+  finishChoice({ ok: true });
+  await until(() => $('#closeModal').hidden);
+  w.MockApi.close_application = async (choice) => { choices.push(choice); return { ok: true }; };
+  requestClose(false);
+  assert.equal($('#closeContinue').disabled, true);
+  assert.equal($('#closePause').disabled, false);
+  $('#closePause').click();
+  await until(() => $('#closeModal').hidden);
+  assert.deepEqual(choices, ['cancel', 'continue', 'pause']);
+  // Le calcul peut changer entre la demande et la sélection : revalider côté Python.
+  w.MockApi.close_application = async () => ({ ok: false, error: 'Un traitement local a commencé.', options: { can_continue: false } });
+  requestClose();
+  $('#closeContinue').click();
+  await until(() => $('#closeContinue').disabled && !$('#closePause').disabled);
+  assert.equal($('#closeModal').hidden, false);
+  assert.equal($('#closeNote').textContent, 'Un traitement local a commencé.');
+  w.MockApi.close_application = async () => { throw new Error('Connexion perdue'); };
+  $('#closePause').click();
+  await until(() => $('#closeNote').textContent.includes('Connexion perdue'));
+  assert.equal($('#closeModal').hidden, false);
+  w.MockApi.close_application = async () => ({ ok: true });
+  $('#closeStay').click();
+  await until(() => $('#closeModal').hidden);
+  w.__testEvent({ type: 'close_failed', error: 'Disque plein : la fenêtre reste ouverte.' });
+  assert.equal($('#errorModal').hidden, false);
+  assert.match($('#errText').textContent, /Disque plein/);
+  $('#errClose').click();
   assert.deepEqual(errors, []);
-  console.log('OK : catalogue, installation, consentement, démarrage opt-in, appairage, reconfiguration sans code/GPU inchangé, destination, finitions Auto, FPS entiers et cartes images.');
+  console.log('OK : catalogue, consentement, appairage 3 h, reconfiguration, destination, finitions Auto, FPS entiers, cartes images ; fermeture continuer/pause/annuler, focus, doubles clics et erreurs.');
   dom.window.close();
 })().catch((error) => { console.error(error); dom.window.close(); process.exitCode = 1; });

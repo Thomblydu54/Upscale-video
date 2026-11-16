@@ -198,7 +198,7 @@ if (window.MockApi) {
     const mock = window.MockApi;
     let installed = false;
     let remote = { installed: false, role: '', running: false, startup: false, workers: [], selected: '' };
-    const catalog = () => ({ checked: true, busy: '', error: '', items: [{ id: 'remote-compute', name: 'Calcul à distance', version: '1.0.1', installed: installed ? '1.0.1' : '', available: true,
+    const catalog = () => ({ checked: true, busy: '', error: '', items: [{ id: 'remote-compute', name: 'Calcul à distance', version: '1.0.2', installed: installed ? '1.0.2' : '', available: true,
       description: 'Confiez vos vidéos au GPU d’un autre PC, suivez le calcul et récupérez le résultat automatiquement.', permissions: ['Réseau et médias choisis', 'Calcul GPU en arrière-plan', 'Démarrage Windows facultatif'] }] });
     const init = mock.init.bind(mock), poll = mock.poll.bind(mock);
     mock.init = async () => ({ ...await init(), extensions: catalog(), remote });
