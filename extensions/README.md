@@ -1,7 +1,7 @@
 # Extensions officielles — API 1
 
 Les extensions se téléchargent depuis **Extensions** dans l'application. La première est
-**Calcul à distance**, version 1.0.3, compatible avec Upscale Video AI ≥ 1.9.3.
+**Calcul à distance**, version 1.0.4, compatible avec Upscale Video AI ≥ 1.9.4.
 
 ## Développer et publier
 

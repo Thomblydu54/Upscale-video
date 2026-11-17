@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import unittest
+import uuid
 from pathlib import Path
 from unittest import mock
 
@@ -239,6 +240,31 @@ class OfflineWorkerTests(unittest.TestCase):
         self.assertEqual(self.hub.state["jobs"][job["id"]]["status"], "paused")
         self.assertEqual(read_json(self.worker.folder / job["id"] / "worker.json")["checkpoint"]["fake_done"], 3)
         self.assertFalse((self.worker.folder / job["id"] / "result.mp4").exists())
+
+    def test_abandoned_before_submission_is_cancelled_not_stuck_paused_and_new_job_works(self):
+        request_id = uuid.uuid4().hex
+        self.hub.command_request(request_id, "cancel", time.time_ns())
+        target = self.target(request_id)
+
+        class LocalPlugin:
+            def ensure_running(self):
+                pass
+
+            def controller(inner, pin=None):
+                return self.controller
+
+            def command(inner, request_id, desired):
+                self.hub.command_request(request_id, desired, time.time_ns())
+
+        runner = protocol.RemoteRunner(LocalPlugin(), target)
+        with self.assertRaises(engine.Cancelled):
+            runner.process(str(self.source), self.settings, str(self.folder / "abandoned.mp4"))
+        self.assertFalse(self.hub.state["jobs"])
+        self.assertFalse(protocol.FakeUpscaler.calls)
+        fresh = self.create()  # une nouvelle demande ne doit pas hériter de l'abandon précédent
+        self.worker.run_one(fresh)
+        self.assertEqual(self.hub.state["jobs"][fresh["id"]]["status"], "ready")
+        self.assertEqual(len(protocol.FakeUpscaler.calls), 1)
 
     def test_http_disconnect_before_status_is_retryable_not_a_dead_monitor(self):
         with mock.patch("http.client.HTTPSConnection.getresponse", side_effect=http.client.BadStatusLine("coupure")):

@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.9.4
+- Correction d'un cas d'abandon distant reçu avant la création du travail : la reprise ne reste plus bloquée indéfiniment en « pause » sur une demande déjà annulée. L'ancien travail est correctement marqué abandonné, et un nouveau lancement reçoit un identifiant neuf.
+- **Calcul à distance 1.0.4**, nécessitant l'application **1.9.4**. Appairage et autres travaux conservés.
+- Régression testée : abandon précoce puis nouveau travail distant réussi ; les commandes d'abandon ne contaminent pas les nouveaux identifiants.
+
 ## v1.9.3
 - **Le PC de calcul continue après un crash de l'application principale ou l'arrêt brutal du PC principal**, sans dépendre de son événement de fermeture. Le service relais est détaché de la fenêtre ; une source complète et vérifiée autorisée peut commencer/finir même si le relais disparaît à la frontière transfert → calcul.
 - Le PC de calcul garde checkpoints et résultat local jusqu'au retour du principal ; l'application récupère automatiquement avec le même travail et les mêmes réglages, sans recalcul d'un résultat déjà terminé ni reçu anticipé. Les réglages/checkpoints du PC principal sont écrits de façon durable avant envoi.

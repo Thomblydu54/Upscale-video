@@ -106,6 +106,10 @@ class RemoteRunner:
                 self._save(dict(self._state))
             except ProtocolError as e:
                 self._check()
+                if e.status == 410:
+                    # Une annulation déjà durable n'est pas une pause récupérable.
+                    # Purger le manifeste local pour autoriser un nouveau job (nouvel ID).
+                    raise engine.Cancelled() from e
                 if e.status < 500:
                     self.log(str(e))
                     raise engine.Paused() from e

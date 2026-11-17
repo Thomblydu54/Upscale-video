@@ -141,7 +141,9 @@ class Hub:
                         raise ProtocolError("Ce traitement existe déjà avec une autre source/destination.", 409)
                     return self.public_job(job)
             if request_id in self.state["cancelled_requests"]:
-                raise ProtocolError("Ce travail a été abandonné.", 409)
+                # 410 Gone : le contrôleur ne doit pas garder ce manifeste local en
+                # « pause » indéfiniment quand l'abandon est arrivé avant la création.
+                raise ProtocolError("Ce travail a déjà été abandonné.", 410)
             if sum(j["worker"] == worker and j["status"] != "cleaned"
                    for j in self.state["jobs"].values()) >= 100:
                 raise ProtocolError("Ce PC a déjà 100 travaux en attente de livraison/nettoyage.", 409)
