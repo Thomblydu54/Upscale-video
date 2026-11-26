@@ -3,7 +3,7 @@
   * realesrgan-ncnn-vulkan (moteur IA, GPU via Vulkan : NVIDIA / AMD / Intel)
   * modèles Real-ESRGAN officiels + modèles Upscayl (lite / standard)
   * rife-ncnn-vulkan + modèle rife-v4.6 (interpolation d'images, GPU via Vulkan)
-  * ffmpeg + ffprobe (builds BtbN, GPL, partagés)
+  * ffmpeg + ffprobe (builds BtbN GPL statiques sous Windows, partagés sous Linux)
 
 Usage :  python scripts/fetch_tools.py [--platform windows|linux]
 """
@@ -29,8 +29,10 @@ REALESRGAN = {
              "realesrgan-ncnn-vulkan-20220424-ubuntu.zip",
 }
 FFMPEG = {
+    # Build statique : aucune avformat-*.dll non signée à charger depuis le dossier
+    # temporaire _MEI de PyInstaller onefile (Smart App Control Windows).
     "windows": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
-               "ffmpeg-n8.1-latest-win64-gpl-shared-8.1.zip",
+               "ffmpeg-n8.1-latest-win64-gpl-8.1.zip",
     "linux": "https://github.com/BtbN/FFmpeg-Builds/releases/download/latest/"
              "ffmpeg-n8.1-latest-linux64-gpl-8.1.tar.xz",
 }
@@ -124,11 +126,23 @@ def fetch_ffmpeg(platform: str) -> None:
     raw = download(FFMPEG[platform])
     if platform == "windows":
         z = zipfile.ZipFile(io.BytesIO(raw))
+        executables = {"ffmpeg.exe", "ffprobe.exe"}
+        found = set()
         for name in z.namelist():
-            base = os.path.basename(name)
-            if "/bin/" in name and (base in ("ffmpeg.exe", "ffprobe.exe") or base.endswith(".dll")):
-                with z.open(name) as src, open(os.path.join(BIN, base), "wb") as dst:
-                    shutil.copyfileobj(src, dst)
+            base = os.path.basename(name).lower()
+            if "/bin/" not in name or base not in executables:
+                continue  # le build statique n'a besoin d'aucune DLL FFmpeg voisine
+            with z.open(name) as src, open(os.path.join(BIN, base), "wb") as dst:
+                shutil.copyfileobj(src, dst)
+            found.add(base)
+        if found != executables:
+            raise RuntimeError("Build FFmpeg Windows incomplet : ffmpeg.exe et ffprobe.exe sont requis.")
+        # Évite qu'un build local relancé conserve les DLL partagées de l'ancien paquet.
+        for name in os.listdir(BIN):
+            low = name.lower()
+            if low.endswith(".dll") and low.startswith(("avcodec-", "avdevice-", "avfilter-", "avformat-",
+                                                          "avutil-", "postproc-", "swresample-", "swscale-")):
+                os.remove(os.path.join(BIN, name))
     else:
         with tarfile.open(fileobj=io.BytesIO(raw), mode="r:xz") as t:
             for m in t.getmembers():

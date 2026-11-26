@@ -177,7 +177,7 @@ votre box, votre pare-feu, vos pilotes GPU ni votre débit à distance.
 - Sur le **PC de calcul**, les mêmes choix gardent le service sans fenêtre actif ou l'arrêtent
   après enregistrement de l'avancement. Le choix de démarrage à l'ouverture de session Windows
   n'est pas modifié ; la réouverture de l'application peut relancer le service.
-- Cette fonction nécessite l'application **1.9.4** et l'extension **Calcul à distance 1.0.4**
+- Cette fonction nécessite l'application **1.9.5** et l'extension **Calcul à distance 1.0.4**
   (sur les deux PC). Mettez l'application à jour, puis **Extensions → Actualiser → Mettre à jour**.
   Terminez les travaux en attente avant de mettre l'extension à jour. Appairage et réglages conservés.
 - Un crash de l'application ou l'arrêt brutal du PC principal n'envoie pas de pause au PC de calcul.

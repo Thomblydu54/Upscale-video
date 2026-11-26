@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.9.5
+- **Compatibilité Windows Smart App Control** : FFmpeg/ffprobe utilisent désormais le build GPL statique sous Windows. L'application n'extrait plus les DLL partagées FFmpeg non signées (notamment `avformat-62.dll`) dans le dossier temporaire PyInstaller `_MEI`, à l'origine des blocages signalés.
+- Le build vérifie la présence des deux exécutables et n'embarque aucune DLL FFmpeg issue du paquet partagé ; une régression couvre aussi le nettoyage d'anciennes DLL.
+- Aucun réglage de Smart App Control, Defender ou des exclusions Windows n'est modifié par l'application.
+
 ## v1.9.4
 - Correction d'un cas d'abandon distant reçu avant la création du travail : la reprise ne reste plus bloquée indéfiniment en « pause » sur une demande déjà annulée. L'ancien travail est correctement marqué abandonné, et un nouveau lancement reçoit un identifiant neuf.
 - **Calcul à distance 1.0.4**, nécessitant l'application **1.9.4**. Appairage et autres travaux conservés.
