@@ -32,6 +32,7 @@ MODEL_META = {
     "realesrgan-x4plus": {"speed": 2, "quality": 4, "icon": "wand", "tag": "Débruitage"},
     "realesr-animevideov3": {"speed": 5, "quality": 4, "icon": "brush", "tag": "Anime rapide"},
     "realesrgan-x4plus-anime": {"speed": 2, "quality": 5, "icon": "star", "tag": "Anime HQ"},
+    "digital-art-4x": {"speed": 2, "quality": 5, "icon": "sparkles", "tag": "Expérimental"},
 }
 MODEL_SHORT = {
     "upscayl-lite-4x": ("Réaliste Rapide", "Films, séries, vidéos perso"),
@@ -39,6 +40,7 @@ MODEL_SHORT = {
     "realesrgan-x4plus": ("Real-ESRGAN", "Vidéos très bruitées / compressées"),
     "realesr-animevideov3": ("Anime Rapide", "Dessins animés, 2D, x2/x3/x4"),
     "realesrgan-x4plus-anime": ("Anime Pro", "Anime net et fidèle, plus lent"),
+    "digital-art-4x": ("Illustration détaillée", "Upscayl Digital Art · expérimental"),
 }
 
 

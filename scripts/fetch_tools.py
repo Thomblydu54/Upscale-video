@@ -44,7 +44,7 @@ RIFE = {
 }
 RIFE_MODELS = ["rife-v4.6"]
 UPSCAYL_COMMIT = "a00d55fee90e0f9435d5eaa86e76700df8199af8"
-UPSCAYL_MODELS = ["upscayl-lite-4x", "upscayl-standard-4x"]
+UPSCAYL_MODELS = ["upscayl-lite-4x", "upscayl-standard-4x", "digital-art-4x"]
 UPSCAYL_URL = ("https://raw.githubusercontent.com/upscayl/upscayl/"
                f"{UPSCAYL_COMMIT}/resources/models/{{name}}")
 

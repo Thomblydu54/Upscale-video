@@ -11,6 +11,22 @@ from unittest import mock
 from scripts import fetch_tools
 
 
+class UpscaylModelFetchTests(unittest.TestCase):
+    def test_digital_art_weights_are_pinned_and_packaged_as_ncnn_pair(self):
+        model = "digital-art-4x"
+        self.assertIn(model, fetch_tools.UPSCAYL_MODELS)
+        with tempfile.TemporaryDirectory() as tmp, \
+             mock.patch.object(fetch_tools, "MODELS", tmp), \
+             mock.patch.object(fetch_tools, "download", side_effect=lambda url: url.rsplit("/", 1)[-1].encode()) as download:
+            fetch_tools.fetch_upscayl_models()
+            root = Path(tmp)
+            self.assertEqual((root / f"{model}.param").read_bytes(), f"{model}.param".encode())
+            self.assertEqual((root / f"{model}.bin").read_bytes(), f"{model}.bin".encode())
+        self.assertEqual(download.call_count, len(fetch_tools.UPSCAYL_MODELS) * 2)
+        for call in download.call_args_list:
+            self.assertIn(fetch_tools.UPSCAYL_COMMIT, call.args[0])
+
+
 class StaticFfmpegPackageTests(unittest.TestCase):
     def test_windows_fetch_keeps_only_self_contained_ffmpeg_programs(self):
         archive = io.BytesIO()

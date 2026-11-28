@@ -8,6 +8,7 @@
     { key: 'realesrgan-x4plus', name: 'Real-ESRGAN', sub: 'Vidéos très bruitées / compressées', description: 'Très propre, lisse un peu les textures.', scales: [4], speed: 2, quality: 4, icon: 'wand', tag: 'Débruitage' },
     { key: 'realesr-animevideov3', name: 'Anime Rapide', sub: 'Dessins animés, 2D, x2/x3/x4', description: 'Très rapide.', scales: [2, 3, 4], speed: 5, quality: 4, icon: 'brush', tag: 'Anime rapide' },
     { key: 'realesrgan-x4plus-anime', name: 'Anime Pro', sub: 'Anime net et fidèle, plus lent', description: 'Plus net, plus lent.', scales: [4], speed: 2, quality: 5, icon: 'star', tag: 'Anime HQ' },
+    { key: 'digital-art-4x', name: 'Illustration détaillée', sub: 'Anime et dessin · expérimental', description: 'Upscayl Digital Art : renforce les traits, peut inventer de fines textures. À tester surtout sur images fixes.', scales: [4], speed: 2, quality: 5, icon: 'sparkles', tag: 'Expérimental' },
   ];
   const FINISHES = [
     ['eclatant', 'Éclatant', { finish_sharp: 45, finish_color: 55, finish_contrast: 35, finish_glow: 15, finish_warmth: 0 }],
@@ -143,7 +144,7 @@
       return out;
     },
     async check_update(manual) {
-      events.push({ type: 'update', version: '1.10.0', tag: 'v1.10.0', current: '1.9.5', size: 254e6, can_install: true, page: '#',
+      events.push({ type: 'update', version: '1.10.0', tag: 'v1.10.0', current: '1.9.6', size: 254e6, can_install: true, page: '#',
         notes: "## Nouveautés\n- **Restauration des visages** par IA\n- Corrections de bugs" });
       return { status: 'available' };
     },
@@ -163,7 +164,7 @@
       setTimeout(() => SAMPLES.forEach(addSample), 400);
       setTimeout(() => this.check_update(false), 3500);
       return {
-        version: '1.9.5', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
+        version: '1.9.6', models: MODELS, settings: { ...settings }, gpus: null, files: [], running: false,
         sizes: SIZES.map(([key, label]) => ({ key, label })),
         encoders: ENCODERS.map(([key, label]) => ({ key, label })),
         speeds: [{ key: 'fast', label: 'Rapide' }, { key: 'medium', label: 'Équilibré' }, { key: 'slow', label: 'Lent' }],
@@ -237,7 +238,7 @@
       return true;
     },
     async start() {
-      const short = { 'upscayl-lite-4x': 'Réaliste Rapide', 'upscayl-standard-4x': 'Réaliste Pro', 'realesrgan-x4plus': 'Real-ESRGAN', 'realesr-animevideov3': 'Anime Rapide', 'realesrgan-x4plus-anime': 'Anime Pro' };
+      const short = { 'upscayl-lite-4x': 'Réaliste Rapide', 'upscayl-standard-4x': 'Réaliste Pro', 'realesrgan-x4plus': 'Real-ESRGAN', 'realesr-animevideov3': 'Anime Rapide', 'realesrgan-x4plus-anime': 'Anime Pro', 'digital-art-4x': 'Illustration détaillée' };
       const summary = (f) => [short[settings.model] || settings.model, (SIZES.find((x) => x[0] === settings.output_size) || [0, settings.output_size])[1],
         ...(f.kind === 'image' ? [`format ${settings.image_format === 'auto' ? 'identique' : settings.image_format.toUpperCase()}`]
           : [...(settings.interpolation === 'custom' ? [`fluidité ${String(settings.interp_fps).replace('.', ',')} i/s`] : settings.interpolation && settings.interpolation !== 'off' ? [`fluidité ${settings.interpolation}`] : []), `${String(settings.encoder).includes('265') || String(settings.encoder).includes('hevc') ? 'H.265' : 'H.264'} ${String(settings.container || 'mp4').toUpperCase()} · CRF ${settings.quality}`]),

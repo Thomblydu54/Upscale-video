@@ -1,5 +1,10 @@
 # Journal des modifications
 
+## v1.9.6
+- Ajout du modèle indépendant **Illustration détaillée – Expérimental** (Upscayl Digital Art 4x), particulièrement adapté aux illustrations/anime et au test sur images fixes. Les modèles existants et le modèle par défaut ne changent pas.
+- Le nouveau modèle peut accentuer ou inventer de fines textures ; il est déconseillé pour les vidéos à cause du risque de scintillement entre images.
+- Modèle et présentation ajoutés au paquet Windows et au mode démo ; tests couvrant catalogue, échelle x4 et téléchargement des poids.
+
 ## v1.9.5
 - **Compatibilité Windows Smart App Control** : FFmpeg/ffprobe utilisent désormais le build GPL statique sous Windows. L'application n'extrait plus les DLL partagées FFmpeg non signées (notamment `avformat-62.dll`) dans le dossier temporaire PyInstaller `_MEI`, à l'origine des blocages signalés.
 - Le build vérifie la présence des deux exécutables et n'embarque aucune DLL FFmpeg issue du paquet partagé ; une régression couvre aussi le nettoyage d'anciennes DLL.

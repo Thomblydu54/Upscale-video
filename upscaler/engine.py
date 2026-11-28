@@ -54,6 +54,8 @@ MODELS: list[Model] = [
           "Dessins animés, anime, 2D. Très rapide, supporte x2 / x3 / x4 natifs."),
     Model("realesrgan-x4plus-anime", "Animation / Anime – Haute qualité (lent)", (4,),
           "Anime avec un rendu plus net et plus fidèle, mais plus lent."),
+    Model("digital-art-4x", "Illustration détaillée – Expérimental", (4,),
+          "Upscayl Digital Art : renforce les traits et détails d'illustrations. Peut inventer de fines textures ; à tester surtout sur images fixes."),
 ]
 MODELS_BY_KEY = {m.key: m for m in MODELS}
 

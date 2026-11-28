@@ -41,7 +41,9 @@ Pour voir l'interface en **mode démo** dans un navigateur : `cd ui && python -m
    | Réaliste – Haute qualité | vidéos réelles, détails maximum | ⚡ |
    | Real-ESRGAN x4plus | vidéos réelles très bruitées | ⚡ |
    | Animation / Anime – Rapide | dessins animés, anime | ⚡⚡⚡⚡ |
-   | Animation / Anime – Haute qualité | anime, rendu plus net | ⚡ |
+   | Animation / Anime – Haute qualité | anime, rendu plus net et fidèle | ⚡ |
+   | Illustration détaillée *(expérimental)* | anime et illustrations, traits plus marqués | ⚡ |
+   Le modèle expérimental **Digital Art 4x** est distinct des modèles Anime. Il peut accentuer ou inventer de petites textures : commence par une image fixe et compare le même cadrage avant/après. Il n'est pas conseillé pour les vidéos, où les détails inventés peuvent varier d'une image à l'autre.
 3. **Choisissez la résolution de sortie** : x2, x3, x4, 720p, 1080p, 1440p, 4K ou 8K. Vous pouvez aussi garder la *taille d'origine* pour n'utiliser que l'interpolation.
    - **Fluidité (interpolation IA)** : ×2, ×3 ou ×4 images par seconde (par exemple 30 → 60 i/s), grâce à [RIFE](https://github.com/hzwer/ECCV2022-RIFE). Avec **Perso**, vous entrez vous-même la fréquence de sortie (ex. 50, 60 ou 144 i/s), même si ce n'est pas un multiple de celle de la vidéo. Les changements de plan sont détectés, pour ne jamais fondre deux scènes l'une dans l'autre. Ce réglage ne concerne que les vidéos.
 4. Cliquez sur **Aperçu IA**, ou sur « Aperçu » sur une carte vidéo, puis **choisissez l'image** à tester :
@@ -253,7 +255,7 @@ L'exe se trouve ensuite dans `dist/`.
 ## Crédits et licences
 - Real-ESRGAN : © Xintao Wang, licence BSD-3-Clause
 - RIFE / rife-ncnn-vulkan : © hzwer, nihui, licence MIT
-- Modèles Upscayl : © Upscayl, AGPL-3.0
+- Modèles Upscayl (*lite*, *standard* et *Digital Art 4x*) : © Upscayl, AGPL-3.0
 - FFmpeg : GPL
 - cryptography : Apache-2.0 / BSD-3-Clause (identité TLS du relais et certificats).
 - pywebview : BSD-3-Clause. Sun Valley ttk theme : MIT. tkinterdnd2 : MIT.
