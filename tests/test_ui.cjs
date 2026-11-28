@@ -23,7 +23,8 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn) { for (let i = 0; i < 100; i++) { if (fn()) return; await sleep(50); } throw new Error('Délai dépassé'); }
 (async () => {
   await until(() => w.__appReady);
-  assert.equal($$('.model-card').length, 5);
+  assert.equal($$('.model-card').length, 6);
+  assert.ok($('.model-card[data-k="digital-art-4x"]'));
   assert.equal($('#remoteDestination').hidden, true);
   $('#extensionsBtn').click();
   assert.equal($('#extensionsModal').hidden, false);
